@@ -7,10 +7,10 @@
  *           _electron.launch(), listens on a Unix socket for commands.
  *   other → client connects to the daemon socket, sends the command, prints result.
  *
- * The app has two frames:
- *   main    — VS Code chrome (sidebar tree, toolbar, status bar, terminal)
- *   webview — WSO2 extension UI (landing page, design canvas, forms)
- * Commands default to webview; pass --main to target VS Code chrome.
+ * The app has two targetable frames:
+ *   host  — VS Code chrome (sidebar, toolbar, status bar, terminal)
+ *   guest — WSO2 extension UI (landing page, design canvas, forms)
+ * Commands default to guest; pass --host to target VS Code chrome.
  */
 
 import fs from 'fs';
@@ -131,12 +131,12 @@ async function startDaemonProcess() {
   }
 
   function pickFrame(args) {
-    return args.includes('--main') ? mainFrame() : webviewFrame();
+    return args.includes('--host') ? mainFrame() : webviewFrame();
   }
 
   async function snapshot(which) {
-    if (which !== 'main') await waitForWebviewFrame();
-    const frame = which === 'main' ? mainFrame() : webviewFrame();
+    if (which !== 'host') await waitForWebviewFrame();
+    const frame = which === 'host' ? mainFrame() : webviewFrame();
     return await frame.locator('body').ariaSnapshot({ ref: true });
   }
 
@@ -201,7 +201,7 @@ async function startDaemonProcess() {
   async function handleCommand(cmd, args) {
     switch (cmd) {
       case 'snapshot': {
-        return await snapshot(args.includes('--main') ? 'main' : 'webview');
+        return await snapshot(args.includes('--host') ? 'host' : 'guest');
       }
       case 'screenshot': {
         const file = args.find(a => !a.startsWith('-'))
@@ -214,10 +214,10 @@ async function startDaemonProcess() {
       case 'click':
       case 'dblclick': {
         const target = args.find(a => !a.startsWith('-'));
-        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--no-force] [--main]`);
-        const isWebview = !args.includes('--main');
-        // Auto-force for webview (overlay divs intercept pointer events), opt out with --no-force
-        const force = args.includes('--no-force') ? false : (args.includes('--force') || isWebview);
+        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--no-force] [--host]`);
+        const isGuest = !args.includes('--host');
+        // Auto-force for guest (overlay divs intercept pointer events), opt out with --no-force
+        const force = args.includes('--no-force') ? false : (args.includes('--force') || isGuest);
         const frame = pickFrame(args);
         const locator = resolveLocator(frame, target);
         const opts = { timeout: 5000, force };
@@ -225,12 +225,12 @@ async function startDaemonProcess() {
           if (cmd === 'dblclick') await locator.dblclick(opts);
           else await locator.click(opts);
         });
-        const which = isWebview ? 'webview' : 'main';
+        const which = isGuest ? 'guest' : 'host';
         return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${target}\n` + await snapshot(which);
       }
       case 'fill': {
         const target = args[0];
-        if (!target || args.length < 2) throw new Error('Usage: fill <target> <text> [--main]');
+        if (!target || args.length < 2) throw new Error('Usage: fill <target> <text> [--host]');
         const frame = pickFrame(args);
         const text = args.filter(a => a !== target && !a.startsWith('-')).join(' ');
         await waitForCompletion(window, async () => {
@@ -253,7 +253,7 @@ async function startDaemonProcess() {
             await locator.fill(text, { timeout: 5000 });
           }
         });
-        const which = args.includes('--main') ? 'main' : 'webview';
+        const which = args.includes('--host') ? 'host' : 'guest';
         return `Filled: ${target}\n` + await snapshot(which);
       }
       case 'type': {
@@ -270,7 +270,7 @@ async function startDaemonProcess() {
         return `Pressed: ${args[0]}`;
       }
       case 'eval': {
-        if (!args[0]) throw new Error('Usage: eval <js> [--main]');
+        if (!args[0]) throw new Error('Usage: eval <js> [--host]');
         const js = args.filter(a => !a.startsWith('-')).join(' ');
         const frame = pickFrame(args);
         return String(await frame.evaluate(js));
@@ -405,13 +405,13 @@ Usage: wso2integrator-cli <command> [args]
 
 Commands:
   open [--user-data-dir=p]  Launch app (fresh temp profile by default)
-  snapshot [--main]         Aria tree with element refs
-  click <target> [--force] [--main]   Click element
-  dblclick <target> [--force] [--main] Double-click element
-  fill <target> <text> [--main]       Fill input field
+  snapshot [--host]         Aria tree with element refs
+  click <target> [--force] [--host]   Click element
+  dblclick <target> [--force] [--host] Double-click element
+  fill <target> <text> [--host]       Fill input field
   type <text>               Type via keyboard
   press <key>               Press key (Enter, Tab, Meta+k, etc.)
-  eval <js> [--main]        Evaluate JS in frame
+  eval <js> [--host]        Evaluate JS in frame
   screenshot [file]         Save screenshot
   wait [ms]                 Wait (default 2000ms)
   close                     Quit the app
@@ -423,7 +423,7 @@ Targeting:
     "getByRole('button', {name:'X'})" Playwright locator
 
 Flags:
-  --main      Target VS Code chrome instead of the webview
+  --host      Target VS Code chrome instead of the guest (WSO2 extension UI)
   --force     Bypass overlay/pointer-event checks on click
   --user-data-dir=<path>  Use a specific profile directory (persistent state)
 

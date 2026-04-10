@@ -37,20 +37,20 @@ wso2integrator-cli close
 | Command                             | Description                                |
 | ----------------------------------- | ------------------------------------------ |
 | `open [--user-data-dir=p]`          | Launch app. Fresh temp profile by default. |
-| `snapshot [--main]`                 | Aria tree with element refs                |
-| `click <ref> [--force] [--main]`    | Click element                              |
-| `dblclick <ref> [--force] [--main]` | Double-click element                       |
-| `fill <ref> <text> [--main]`        | Fill input field                           |
+| `snapshot [--host]`                 | Aria tree with element refs                |
+| `click <ref> [--force] [--host]`    | Click element                              |
+| `dblclick <ref> [--force] [--host]` | Double-click element                       |
+| `fill <ref> <text> [--host]`        | Fill input field                           |
 | `type <text>`                       | Type via keyboard                          |
 | `press <key>`                       | Press key (Enter, Tab, Meta+k, etc.)       |
-| `eval <js> [--main]`                | Evaluate JS in frame                       |
+| `eval <js> [--host]`                | Evaluate JS in frame                       |
 | `screenshot [file]`                 | Save screenshot                            |
 | `wait [ms]`                         | Wait (default 2000ms)                      |
 | `close`                             | Quit the app                               |
 
 ### Flags
 
-- **`--main`** — Target VS Code chrome (sidebar, toolbar, status bar) instead of the webview
+- **`--host`** — Target VS Code chrome (sidebar, toolbar, status bar) instead of the guest (WSO2 extension UI)
 - **`--force`** — Bypass overlay/pointer-event checks (needed for most webview buttons)
 - **`--user-data-dir=<path>`** — Persist state across runs (omit for fresh profile each time)
 
@@ -75,8 +75,8 @@ wso2integrator-cli <command>
 
 Two frames:
 
-- **webview** (default) — WSO2 extension UI: landing page, design canvas, forms
-- **main** (`--main`) — VS Code chrome: sidebar tree, toolbar, terminal, status bar
+- **guest** (default) — WSO2 extension UI: landing page, design canvas, forms
+- **host** (`--host`) — VS Code chrome: sidebar tree, toolbar, terminal, status bar
 
 ## Examples
 

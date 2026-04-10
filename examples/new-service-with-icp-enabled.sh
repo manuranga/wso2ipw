@@ -37,9 +37,9 @@ for attempt in 1 2 3 4 5; do
   r=$(ref "$snap" 'Skip for now')
   if [ -n "$r" ]; then pw click "$r" > /dev/null; echo "  Skipped sign-in"; break; fi
 
-  snap=$(pw snapshot --main 2>/dev/null || true)
+  snap=$(pw snapshot --host 2>/dev/null || true)
   r=$(ref "$snap" 'Skip for now')
-  if [ -n "$r" ]; then pw click "$r" --main > /dev/null; echo "  Skipped sign-in (main)"; break; fi
+  if [ -n "$r" ]; then pw click "$r" --host > /dev/null; echo "  Skipped sign-in (main)"; break; fi
 
   echo "$snap" | grep -q 'button "Create"' && { echo "  No sign-in dialog"; break; }
 done
@@ -98,8 +98,8 @@ echo "✓ HTTP Service with GET /greeting created"
 # ── 4. Run the integration ───────────────────────────────────────────────────
 
 step "4. Run integration"
-snap=$(pw snapshot --main)
-pw click "$(ref "$snap" 'button "Run Integration"')" --main > /dev/null
+snap=$(pw snapshot --host)
+pw click "$(ref "$snap" 'button "Run Integration"')" --host > /dev/null
 pw wait 5000 > /dev/null
 pw screenshot /tmp/step4-after-run.png > /dev/null
 echo "  Screenshot: /tmp/step4-after-run.png"
@@ -119,11 +119,11 @@ done
 
 step "5. Enable ICP"
 
-snap=$(pw snapshot --main)
-pw click "$(ref "$snap" 'button "Stop')" --main > /dev/null
+snap=$(pw snapshot --host)
+pw click "$(ref "$snap" 'button "Stop')" --host > /dev/null
 
-snap=$(pw snapshot --main)
-pw click "$(ref "$snap" 'Show Overview')" --main > /dev/null
+snap=$(pw snapshot --host)
+pw click "$(ref "$snap" 'Show Overview')" --host > /dev/null
 
 snap=$(pw snapshot)
 pw click "$(ref "$snap" 'Enable ICP for all integrations')" > /dev/null
@@ -140,13 +140,13 @@ echo "✓ ICP enabled"
 
 step "6. ICP server + re-run"
 
-snap=$(pw snapshot --main)
-pw click "$(ref "$snap" 'ICP: Stopped')" --main > /dev/null
+snap=$(pw snapshot --host)
+pw click "$(ref "$snap" 'ICP: Stopped')" --host > /dev/null
 
 echo "  Waiting for ICP server (up to 30s)..."
 for i in $(seq 1 6); do
   sleep 5
-  snap=$(pw snapshot --main 2>/dev/null || true)
+  snap=$(pw snapshot --host 2>/dev/null || true)
   if echo "$snap" | grep -q "ICP: Running"; then echo "✓ ICP server running"; break; fi
   [ "$i" -eq 6 ] && fail "ICP server did not start"
 done
@@ -168,7 +168,7 @@ for i in $(seq 1 12); do
 done
 
 pw screenshot icp-final.png > /dev/null
-snap=$(pw snapshot --main)
+snap=$(pw snapshot --host)
 echo "$snap" | grep -q "ICP: Running" || fail "ICP not running after re-run"
 echo "✓ ICP heartbeat verified"
 
@@ -180,7 +180,7 @@ echo "  Screenshot: icp-final.png"
 echo "════════════════════════════════════════════"
 
 # Cleanup
-snap=$(pw snapshot --main 2>/dev/null || true)
+snap=$(pw snapshot --host 2>/dev/null || true)
 r=$(ref "$snap" 'button "Stop')
-[ -n "$r" ] && pw click "$r" --main > /dev/null 2>&1 || true
+[ -n "$r" ] && pw click "$r" --host > /dev/null 2>&1 || true
 pw close 2>/dev/null || true

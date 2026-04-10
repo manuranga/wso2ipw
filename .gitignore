@@ -1,0 +1,3 @@
+.wso2integrator-cli/
+*.png
+node_modules/

@@ -1,0 +1,28 @@
+{
+  "name": "wso2integrator-cli",
+  "version": "0.1.0",
+  "description": "CLI to automate WSO2 Integrator (Electron app) via Playwright",
+  "type": "module",
+  "bin": {
+    "wso2integrator-cli": "./wso2integrator-cli.mjs"
+  },
+  "files": [
+    "wso2integrator-cli.mjs",
+    "examples/"
+  ],
+  "keywords": [
+    "wso2",
+    "integrator",
+    "playwright",
+    "electron",
+    "cli",
+    "automation"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}

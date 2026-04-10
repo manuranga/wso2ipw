@@ -82,6 +82,7 @@ snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
 [ -z "$r" ] && fail "Resource Path field not found"
 pw fill "$r" greeting > /dev/null
+pw press Tab > /dev/null  # blur triggers onBlur validation, enabling Save
 
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Save"')")
@@ -97,10 +98,10 @@ pw click "$(ref "$snap" 'button "Run Integration"')" --host > /dev/null
 echo "  Waiting for Ballerina to compile and start..."
 for i in $(seq 1 18); do
   sleep 5
-  if code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null); then
+  if code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/greeting 2>/dev/null) && [ "$code" = "202" ]; then
     echo "✓ Integration running (HTTP $code)"; break
   fi
-  [ "$i" -eq 18 ] && fail "Integration did not start within 90s"
+  [ "$i" -eq 18 ] && fail "GET /greeting did not return 202 within 90s"
 done
 
 # ── 5. Stop, enable ICP from project overview ────────────────────────────────
@@ -145,10 +146,10 @@ pw click "$r" > /dev/null
 echo "  Waiting for integration to start with ICP..."
 for i in $(seq 1 18); do
   sleep 5
-  if code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null); then
+  if code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/greeting 2>/dev/null) && [ "$code" = "202" ]; then
     echo "✓ Integration running with ICP (HTTP $code)"; break
   fi
-  [ "$i" -eq 18 ] && fail "Integration did not start with ICP within 90s"
+  [ "$i" -eq 18 ] && fail "GET /greeting did not return 202 with ICP within 90s"
 done
 
 pw screenshot icp-final.png > /dev/null

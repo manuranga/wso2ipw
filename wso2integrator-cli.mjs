@@ -19,28 +19,14 @@ import net from 'net';
 import os from 'os';
 import { spawn, execSync } from 'child_process';
 
+// ─── Config ─────────────────────────────────────────────────────────────────
+
 const APP_PATHS = [
-  // macOS
   path.join(os.homedir(), 'Applications/WSO2 Integrator.app/Contents/MacOS/Electron'),
   '/Applications/WSO2 Integrator.app/Contents/MacOS/Electron',
-  // Linux (common locations)
   '/usr/share/wso2-integrator/wso2-integrator',
   path.join(os.homedir(), '.local/share/wso2-integrator/wso2-integrator'),
 ];
-
-function findApp() {
-  const envPath = process.env.WSO2_INTEGRATOR_PATH;
-  if (envPath) {
-    if (fs.existsSync(envPath)) return envPath;
-    throw new Error(`WSO2_INTEGRATOR_PATH set but not found: ${envPath}`);
-  }
-  for (const p of APP_PATHS) {
-    if (fs.existsSync(p)) return p;
-  }
-  throw new Error(
-    'WSO2 Integrator not found. Set WSO2_INTEGRATOR_PATH or install to a standard location.'
-  );
-}
 
 const STATE_DIR = path.join(os.homedir(), '.wso2integrator-cli');
 const SOCKET = path.join(STATE_DIR, 'daemon.sock');
@@ -48,11 +34,25 @@ const PID_FILE = path.join(STATE_DIR, 'daemon.pid');
 const ERR_LOG = path.join(STATE_DIR, 'daemon.err');
 const DAEMON_LOG = path.join(STATE_DIR, 'daemon.log');
 
+function findApp() {
+  if (process.env.WSO2_INTEGRATOR_PATH) {
+    const p = process.env.WSO2_INTEGRATOR_PATH;
+    if (fs.existsSync(p)) return p;
+    throw new Error(`WSO2_INTEGRATOR_PATH not found: ${p}`);
+  }
+  for (const p of APP_PATHS) if (fs.existsSync(p)) return p;
+  throw new Error('WSO2 Integrator not found. Set WSO2_INTEGRATOR_PATH.');
+}
+
 function log(msg) {
-  const ts = new Date().toISOString().slice(11, 23);
-  const line = `[${ts}] ${msg}\n`;
+  const line = `[${new Date().toISOString().slice(11, 23)}] ${msg}\n`;
   process.stderr.write(line);
   try { fs.appendFileSync(DAEMON_LOG, line); } catch {}
+}
+
+function parseFlag(args, name) {
+  const f = args.find(a => a.startsWith(`--${name}=`));
+  return f ? f.split('=').slice(1).join('=') : undefined;
 }
 
 // ─── Message framing: length-prefixed JSON ──────────────────────────────────
@@ -67,8 +67,7 @@ function writeMessage(socket, obj) {
 
 function readMessage(socket) {
   return new Promise((resolve, reject) => {
-    let buf = Buffer.alloc(0);
-    let msgLen = null;
+    let buf = Buffer.alloc(0), msgLen = null;
     socket.on('data', onData);
     socket.on('end', () => reject(new Error('Connection closed')));
     socket.on('error', reject);
@@ -98,95 +97,84 @@ async function startDaemonProcess() {
   const userDataDir = process.env.WSO2I_USER_DATA_DIR
     || fs.mkdtempSync(path.join(os.tmpdir(), 'wso2integrator-cli-'));
 
-  log(`Launching WSO2 Integrator...`);
-  log(`  app: ${appPath}`);
-  log(`  user-data-dir: ${userDataDir}`);
+  log(`Launching: ${appPath}`);
+  log(`User data: ${userDataDir}`);
 
   const app = await electron.launch({
     executablePath: appPath,
     args: [`--user-data-dir=${userDataDir}`],
   });
-
-  app.on('close', () => log('EVENT: ElectronApplication closed'));
-  app.process().on('exit', (code) => log(`EVENT: Electron process exited with code ${code}`));
+  app.on('close', () => log('Electron closed'));
+  app.process().on('exit', code => log(`Electron exited: ${code}`));
 
   const window = await app.firstWindow();
-  window.on('close', () => log('EVENT: Window closed'));
-  window.on('crash', () => log('EVENT: Window crashed!'));
+  window.on('close', () => log('Window closed'));
+  window.on('crash', () => log('Window CRASHED'));
   await window.waitForLoadState('domcontentloaded');
   log('Window loaded');
 
-  // ── Frame helpers ──
+  // ── Frame resolution ──
+
+  let _webviewFrame = null;
 
   function webviewFrame() {
-    const frames = window.frames();
-    for (let i = frames.length - 1; i >= 0; i--) {
-      try { if (frames[i].url().includes('vscode-webview://')) return frames[i]; } catch {}
+    if (_webviewFrame) {
+      try { _webviewFrame.url(); return _webviewFrame; }
+      catch { _webviewFrame = null; }
     }
-    return frames[0];
-  }
-
-  function mainFrame() {
+    for (const f of window.frames().reverse()) {
+      try { if (f.url().includes('vscode-webview://')) return _webviewFrame = f; }
+      catch {}
+    }
     return window.frames()[0];
   }
+
+  function mainFrame() { return window.frames()[0]; }
 
   function pickFrame(args) {
     return args.includes('--host') ? mainFrame() : webviewFrame();
   }
 
-  async function snapshot(which) {
-    if (which !== 'host') await waitForWebviewFrame();
-    const frame = which === 'host' ? mainFrame() : webviewFrame();
-    return await frame.locator('body').ariaSnapshot({ ref: true });
+  function whichFrame(args) {
+    return args.includes('--host') ? 'host' : 'guest';
   }
 
-  // ── Wait for network/navigation to settle after an action ──
-
-  async function waitForCompletion(page, callback) {
-    const requests = [];
-    const onRequest = r => requests.push(r);
-    page.on('request', onRequest);
-    try {
-      await callback();
-      await page.waitForTimeout(500);
-    } finally {
-      page.off('request', onRequest);
-    }
-
-    const hasNavigation = requests.some(r => r.isNavigationRequest());
-    if (hasNavigation) {
-      await page.mainFrame().waitForLoadState('load', { timeout: 10000 }).catch(() => {});
-      // Webview frame may have been recreated — wait for it to have content
-      await waitForWebviewFrame();
-      return;
-    }
-
-    const tracked = requests.filter(r =>
-      ['document', 'stylesheet', 'script', 'xhr', 'fetch'].includes(r.resourceType())
-    );
-    const settled = tracked.map(r => r.response().then(res => res?.finished()).catch(() => {}));
-    const timeout = new Promise(r => setTimeout(r, 5000));
-    await Promise.race([Promise.all(settled), timeout]);
-  }
-
-  // Wait for a webview frame to appear and have content (at least one button).
-  // Needed after actions that cause the webview to be destroyed and recreated.
-  async function waitForWebviewFrame(timeoutMs = 10000) {
+  // Poll until a live webview frame with buttons exists.
+  async function ensureWebviewFrame(timeoutMs = 10000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const frame = webviewFrame();
-      try {
-        const n = await frame.evaluate(() => document.querySelectorAll('button').length);
-        if (n > 0) return;
-      } catch {}
-      await window.waitForTimeout(500);
+      _webviewFrame = null;
+      const f = webviewFrame();
+      try { if (await f.evaluate(() => document.querySelectorAll('button').length) > 0) return f; }
+      catch {}
+      await window.waitForTimeout(200);
+    }
+    return webviewFrame();
+  }
+
+  // ── Snapshot ──
+
+  async function snapshot(which) {
+    const frame = which === 'host' ? mainFrame() : webviewFrame();
+    try {
+      return await frame.locator('body').ariaSnapshot({ ref: true });
+    } catch {
+      if (which === 'host') throw new Error('Host frame unavailable');
+      return await (await ensureWebviewFrame()).locator('body').ariaSnapshot({ ref: true });
     }
   }
 
-  // ── Resolve a target string to a Playwright locator ──
-  //   aria-ref:  s1e29
-  //   CSS:       #main > button, .submit-btn
-  //   Locator:   getByRole('button', { name: 'Create' })
+  // After a mutation: brief settle, then snapshot.
+  // 500ms is enough for React re-renders; frame destruction is caught by snapshot().
+  async function settledSnapshot(which) {
+    await window.waitForTimeout(500);
+    return await snapshot(which);
+  }
+
+  // ── Locator resolution ──
+  //   s1e29              → aria-ref
+  //   getByRole(...)     → Playwright locator API
+  //   anything else      → CSS selector
 
   function resolveLocator(frame, target) {
     if (/^s\d+e\d+$/.test(target))
@@ -199,92 +187,86 @@ async function startDaemonProcess() {
   // ── Command handler ──
 
   async function handleCommand(cmd, args) {
+    const which = whichFrame(args);
+
     switch (cmd) {
-      case 'snapshot': {
-        return await snapshot(args.includes('--host') ? 'host' : 'guest');
-      }
+
+      case 'snapshot':
+        return await snapshot(which);
+
       case 'screenshot': {
         const file = args.find(a => !a.startsWith('-'))
-          || `.wso2integrator-cli/screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+          || `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
         const outPath = args._cwd && !path.isAbsolute(file) ? path.join(args._cwd, file) : file;
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         await window.screenshot({ path: outPath, type: 'png' });
         return `Screenshot saved: ${outPath}`;
       }
+
       case 'click':
       case 'dblclick': {
         const target = args.find(a => !a.startsWith('-'));
-        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--no-force] [--host]`);
-        const isGuest = !args.includes('--host');
-        // Auto-force for guest (overlay divs intercept pointer events), opt out with --no-force
-        const force = args.includes('--no-force') ? false : (args.includes('--force') || isGuest);
-        const frame = pickFrame(args);
-        const locator = resolveLocator(frame, target);
+        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--host]`);
+        const force = args.includes('--no-force') ? false
+          : (args.includes('--force') || which === 'guest');
+        const locator = resolveLocator(pickFrame(args), target);
         const opts = { timeout: 5000, force };
-        await waitForCompletion(window, async () => {
-          if (cmd === 'dblclick') await locator.dblclick(opts);
-          else await locator.click(opts);
-        });
-        const which = isGuest ? 'guest' : 'host';
-        return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${target}\n` + await snapshot(which);
+        if (cmd === 'dblclick') await locator.dblclick(opts);
+        else await locator.click(opts);
+        return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${target}\n` + await settledSnapshot(which);
       }
+
       case 'fill': {
         const target = args[0];
         if (!target || args.length < 2) throw new Error('Usage: fill <target> <text> [--host]');
-        const frame = pickFrame(args);
         const text = args.filter(a => a !== target && !a.startsWith('-')).join(' ');
-        await waitForCompletion(window, async () => {
-          const locator = resolveLocator(frame, target);
-          // Auto-pierce shadow DOM: if the target has a shadowRoot with an <input>,
-          // focus that inner input and type via keyboard instead of Playwright fill().
-          const hasShadowInput = await locator.evaluate(el => {
-            if (!el.shadowRoot) return false;
+        const locator = resolveLocator(pickFrame(args), target);
+        // Shadow DOM inputs (vscode-text-field) need focus+keyboard instead of fill()
+        const hasShadowInput = await locator.evaluate(el =>
+          !!el.shadowRoot?.querySelector('input, textarea')
+        ).catch(() => false);
+        if (hasShadowInput) {
+          await locator.evaluate(el => {
             const input = el.shadowRoot.querySelector('input, textarea');
-            return !!input;
-          }).catch(() => false);
-          if (hasShadowInput) {
-            await locator.evaluate(el => {
-              const input = el.shadowRoot.querySelector('input, textarea');
-              input.focus();
-              input.select();
-            });
-            await window.keyboard.type(text);
-          } else {
-            await locator.fill(text, { timeout: 5000 });
-          }
-        });
-        const which = args.includes('--host') ? 'host' : 'guest';
-        return `Filled: ${target}\n` + await snapshot(which);
+            input.focus(); input.select();
+          });
+          await window.keyboard.type(text);
+        } else {
+          await locator.fill(text, { timeout: 5000 });
+        }
+        return `Filled: ${target}\n` + await settledSnapshot(which);
       }
+
       case 'type': {
         if (!args[0]) throw new Error('Usage: type <text>');
-        const text = args.join(' ');
-        await window.keyboard.type(text);
-        await window.waitForTimeout(300);
-        return `Typed: ${text}`;
+        await window.keyboard.type(args.join(' '));
+        return `Typed: ${args.join(' ')}`;
       }
+
       case 'press': {
         if (!args[0]) throw new Error('Usage: press <key>');
         await window.keyboard.press(args[0]);
-        await window.waitForTimeout(300);
         return `Pressed: ${args[0]}`;
       }
+
       case 'eval': {
         if (!args[0]) throw new Error('Usage: eval <js> [--host]');
         const js = args.filter(a => !a.startsWith('-')).join(' ');
-        const frame = pickFrame(args);
-        return String(await frame.evaluate(js));
+        return String(await pickFrame(args).evaluate(js));
       }
+
       case 'wait': {
         const ms = parseInt(args[0]) || 2000;
         await window.waitForTimeout(ms);
         return `Waited ${ms}ms`;
       }
+
       case 'close': {
         await app.close();
         cleanup();
         return 'Closed.';
       }
+
       default:
         throw new Error(`Unknown command: ${cmd}`);
     }
@@ -298,22 +280,16 @@ async function startDaemonProcess() {
       log(`CMD: ${cmd} ${args.filter(a => typeof a === 'string').join(' ')}`);
       try {
         const result = await handleCommand(cmd, args);
-        log(`CMD OK: ${cmd} (${result?.length || 0} chars)`);
+        log(`OK: ${cmd} (${result?.length ?? 0} chars)`);
         writeMessage(socket, { ok: true, result });
         socket.end();
         if (cmd === 'close') process.exit(0);
       } catch (err) {
-        log(`CMD ERR: ${cmd}: ${err.message}`);
+        log(`ERR: ${cmd}: ${err.message}`);
         writeMessage(socket, { ok: false, error: err.message });
         socket.end();
       }
-    }).catch((e) => { log(`SOCKET ERR: ${e.message}`); socket.destroy(); });
-  });
-
-  server.listen(SOCKET, () => {
-    fs.writeFileSync(PID_FILE, String(process.pid));
-    log(`Daemon ready. PID: ${process.pid}`);
-    process.stdout.write('ready\n');
+    }).catch(e => { log(`SOCKET: ${e.message}`); socket.destroy(); });
   });
 
   function cleanup() {
@@ -321,6 +297,12 @@ async function startDaemonProcess() {
     try { fs.unlinkSync(PID_FILE); } catch {}
     server.close();
   }
+
+  server.listen(SOCKET, () => {
+    fs.writeFileSync(PID_FILE, String(process.pid));
+    log(`Daemon ready. PID: ${process.pid}`);
+    process.stdout.write('ready\n');
+  });
 
   process.on('SIGTERM', () => { cleanup(); process.exit(0); });
   process.on('SIGINT', () => { cleanup(); process.exit(0); });
@@ -330,10 +312,8 @@ async function startDaemonProcess() {
 
 function sendCommand(cmd, args) {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(SOCKET)) {
-      reject(new Error('App not running. Run: wso2integrator-cli open'));
-      return;
-    }
+    if (!fs.existsSync(SOCKET))
+      return reject(new Error('App not running. Run: wso2integrator-cli open'));
     const socket = net.createConnection(SOCKET, () => {
       writeMessage(socket, { cmd, args, cwd: process.cwd() });
     });
@@ -371,20 +351,14 @@ function spawnDaemon(userDataDir) {
     let output = '';
     child.stdout.on('data', chunk => {
       output += chunk.toString();
-      if (output.includes('ready')) {
-        child.stdout.destroy();
-        child.unref();
-        resolve();
-      }
+      if (output.includes('ready')) { child.stdout.destroy(); child.unref(); resolve(); }
     });
-
     child.on('close', code => {
       if (!output.includes('ready')) {
         const errLog = fs.readFileSync(ERR_LOG, 'utf-8').trim();
-        reject(new Error(`Daemon exited (code ${code})${errLog ? '\n' + errLog : ''}`));
+        reject(new Error(`Daemon exited (${code})${errLog ? '\n' + errLog : ''}`));
       }
     });
-
     const timer = setTimeout(() => {
       if (!output.includes('ready')) { child.kill(); reject(new Error('Daemon startup timed out')); }
     }, 60000);
@@ -398,72 +372,58 @@ const [cmd, ...args] = process.argv.slice(2);
 
 if (cmd === '__daemon__') {
   startDaemonProcess().catch(e => { process.stderr.write(e.message + '\n'); process.exit(1); });
+
 } else if (!cmd || cmd === '--help' || cmd === '-h') {
   console.log(`wso2integrator-cli — Automate WSO2 Integrator via Playwright
 
 Usage: wso2integrator-cli <command> [args]
 
 Commands:
-  open [--user-data-dir=p]  Launch app (fresh temp profile by default)
-  snapshot [--host]         Aria tree with element refs
-  click <target> [--force] [--host]   Click element
-  dblclick <target> [--force] [--host] Double-click element
-  fill <target> <text> [--host]       Fill input field
-  type <text>               Type via keyboard
-  press <key>               Press key (Enter, Tab, Meta+k, etc.)
-  eval <js> [--host]        Evaluate JS in frame
-  screenshot [file]         Save screenshot
-  wait [ms]                 Wait (default 2000ms)
-  close                     Quit the app
+  open [--user-data-dir=p]     Launch app (fresh temp profile by default)
+  snapshot [--host]            Aria tree with element refs
+  click <target> [--host]      Click element (auto --force for guest)
+  dblclick <target> [--host]   Double-click element
+  fill <target> <text> [--host] Fill input field
+  type <text>                  Type via keyboard
+  press <key>                  Press key (Enter, Tab, Meta+k, etc.)
+  eval <js> [--host]           Evaluate JS in frame
+  screenshot [file]            Save screenshot
+  wait [ms]                    Sleep (default 2000ms)
+  close                        Quit the app
 
 Targeting:
-  <target> can be:
-    s1e29                            aria-ref from snapshot
-    "#submit-btn"                    CSS selector
-    "getByRole('button', {name:'X'})" Playwright locator
+  s1e29                            aria-ref from snapshot
+  "#submit-btn"                    CSS selector
+  "getByRole('button', {name:'X'})" Playwright locator
 
 Flags:
-  --host      Target VS Code chrome instead of the guest (WSO2 extension UI)
-  --force     Bypass overlay/pointer-event checks on click
-  --user-data-dir=<path>  Use a specific profile directory (persistent state)
+  --host                Target VS Code chrome instead of guest (WSO2 extension UI)
+  --force / --no-force  Override pointer-event checks on click
+  --user-data-dir=<p>   Persistent profile directory
 
 Environment:
-  WSO2_INTEGRATOR_PATH  Path to the Electron binary (auto-detected if not set)
+  WSO2_INTEGRATOR_PATH  Path to Electron binary (auto-detected if unset)`);
 
-Examples:
-  wso2integrator-cli open
-  wso2integrator-cli snapshot
-  wso2integrator-cli click s1e29 --force
-  wso2integrator-cli click "button.submit-btn"
-  wso2integrator-cli fill s2e33 "hello-icp"
-  wso2integrator-cli screenshot before.png
-  wso2integrator-cli close`);
 } else if (cmd === 'open') {
   const pid = isDaemonRunning();
   if (pid) {
-    // Verify the daemon is actually responsive
     try {
       await sendCommand('wait', ['0']);
       console.log(`Already running (PID: ${pid})`);
     } catch {
-      // Stale daemon — kill and restart
-      log(`Stale daemon (PID: ${pid}), restarting...`);
       try { process.kill(pid, 'SIGKILL'); } catch {}
       try { execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' }); } catch {}
       try { fs.unlinkSync(SOCKET); } catch {}
       try { fs.unlinkSync(PID_FILE); } catch {}
       await new Promise(r => setTimeout(r, 2000));
-      const uddArg = args.find(a => a.startsWith('--user-data-dir'));
-      const userDataDir = uddArg ? uddArg.split('=')[1] : undefined;
-      await spawnDaemon(userDataDir);
+      await spawnDaemon(parseFlag(args, 'user-data-dir'));
       console.log('WSO2 Integrator is ready. (restarted)');
     }
   } else {
-    const uddArg = args.find(a => a.startsWith('--user-data-dir'));
-    const userDataDir = uddArg ? uddArg.split('=')[1] : undefined;
-    await spawnDaemon(userDataDir);
+    await spawnDaemon(parseFlag(args, 'user-data-dir'));
     console.log('WSO2 Integrator is ready.');
   }
+
 } else {
   try {
     const result = await sendCommand(cmd, args);

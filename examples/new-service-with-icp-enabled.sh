@@ -97,8 +97,9 @@ pw click "$(ref "$snap" 'button "Run Integration"')" --host > /dev/null
 echo "  Waiting for Ballerina to compile and start..."
 for i in $(seq 1 18); do
   sleep 5
-  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null || echo "000")
-  [ "$code" != "000" ] && { echo "✓ Integration running (HTTP $code)"; break; }
+  if code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null); then
+    echo "✓ Integration running (HTTP $code)"; break
+  fi
   [ "$i" -eq 18 ] && fail "Integration did not start within 90s"
 done
 
@@ -144,8 +145,9 @@ pw click "$r" > /dev/null
 echo "  Waiting for integration to start with ICP..."
 for i in $(seq 1 18); do
   sleep 5
-  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null || echo "000")
-  [ "$code" != "000" ] && { echo "✓ Integration running with ICP (HTTP $code)"; break; }
+  if code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null); then
+    echo "✓ Integration running with ICP (HTTP $code)"; break
+  fi
   [ "$i" -eq 18 ] && fail "Integration did not start with ICP within 90s"
 done
 

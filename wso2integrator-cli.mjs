@@ -46,6 +46,14 @@ const STATE_DIR = path.join(os.homedir(), '.wso2integrator-cli');
 const SOCKET = path.join(STATE_DIR, 'daemon.sock');
 const PID_FILE = path.join(STATE_DIR, 'daemon.pid');
 const ERR_LOG = path.join(STATE_DIR, 'daemon.err');
+const DAEMON_LOG = path.join(STATE_DIR, 'daemon.log');
+
+function log(msg) {
+  const ts = new Date().toISOString().slice(11, 23);
+  const line = `[${ts}] ${msg}\n`;
+  process.stderr.write(line);
+  try { fs.appendFileSync(DAEMON_LOG, line); } catch {}
+}
 
 // ─── Message framing: length-prefixed JSON ──────────────────────────────────
 
@@ -90,16 +98,23 @@ async function startDaemonProcess() {
   const userDataDir = process.env.WSO2I_USER_DATA_DIR
     || fs.mkdtempSync(path.join(os.tmpdir(), 'wso2integrator-cli-'));
 
-  process.stderr.write(`Launching WSO2 Integrator...\n`);
-  process.stderr.write(`  app: ${appPath}\n`);
-  process.stderr.write(`  user-data-dir: ${userDataDir}\n`);
+  log(`Launching WSO2 Integrator...`);
+  log(`  app: ${appPath}`);
+  log(`  user-data-dir: ${userDataDir}`);
 
   const app = await electron.launch({
     executablePath: appPath,
     args: [`--user-data-dir=${userDataDir}`],
   });
+
+  app.on('close', () => log('EVENT: ElectronApplication closed'));
+  app.process().on('exit', (code) => log(`EVENT: Electron process exited with code ${code}`));
+
   const window = await app.firstWindow();
+  window.on('close', () => log('EVENT: Window closed'));
+  window.on('crash', () => log('EVENT: Window crashed!'));
   await window.waitForLoadState('domcontentloaded');
+  log('Window loaded');
 
   // ── Frame helpers ──
 
@@ -199,8 +214,10 @@ async function startDaemonProcess() {
       case 'click':
       case 'dblclick': {
         const target = args.find(a => !a.startsWith('-'));
-        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--main]`);
-        const force = args.includes('--force');
+        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--no-force] [--main]`);
+        const isWebview = !args.includes('--main');
+        // Auto-force for webview (overlay divs intercept pointer events), opt out with --no-force
+        const force = args.includes('--no-force') ? false : (args.includes('--force') || isWebview);
         const frame = pickFrame(args);
         const locator = resolveLocator(frame, target);
         const opts = { timeout: 5000, force };
@@ -208,7 +225,7 @@ async function startDaemonProcess() {
           if (cmd === 'dblclick') await locator.dblclick(opts);
           else await locator.click(opts);
         });
-        const which = args.includes('--main') ? 'main' : 'webview';
+        const which = isWebview ? 'webview' : 'main';
         return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${target}\n` + await snapshot(which);
       }
       case 'fill': {
@@ -217,7 +234,24 @@ async function startDaemonProcess() {
         const frame = pickFrame(args);
         const text = args.filter(a => a !== target && !a.startsWith('-')).join(' ');
         await waitForCompletion(window, async () => {
-          await resolveLocator(frame, target).fill(text, { timeout: 5000 });
+          const locator = resolveLocator(frame, target);
+          // Auto-pierce shadow DOM: if the target has a shadowRoot with an <input>,
+          // focus that inner input and type via keyboard instead of Playwright fill().
+          const hasShadowInput = await locator.evaluate(el => {
+            if (!el.shadowRoot) return false;
+            const input = el.shadowRoot.querySelector('input, textarea');
+            return !!input;
+          }).catch(() => false);
+          if (hasShadowInput) {
+            await locator.evaluate(el => {
+              const input = el.shadowRoot.querySelector('input, textarea');
+              input.focus();
+              input.select();
+            });
+            await window.keyboard.type(text);
+          } else {
+            await locator.fill(text, { timeout: 5000 });
+          }
         });
         const which = args.includes('--main') ? 'main' : 'webview';
         return `Filled: ${target}\n` + await snapshot(which);
@@ -261,21 +295,24 @@ async function startDaemonProcess() {
   const server = net.createServer(socket => {
     readMessage(socket).then(async ({ cmd, args, cwd }) => {
       args._cwd = cwd;
+      log(`CMD: ${cmd} ${args.filter(a => typeof a === 'string').join(' ')}`);
       try {
         const result = await handleCommand(cmd, args);
+        log(`CMD OK: ${cmd} (${result?.length || 0} chars)`);
         writeMessage(socket, { ok: true, result });
         socket.end();
         if (cmd === 'close') process.exit(0);
       } catch (err) {
+        log(`CMD ERR: ${cmd}: ${err.message}`);
         writeMessage(socket, { ok: false, error: err.message });
         socket.end();
       }
-    }).catch(() => socket.destroy());
+    }).catch((e) => { log(`SOCKET ERR: ${e.message}`); socket.destroy(); });
   });
 
   server.listen(SOCKET, () => {
     fs.writeFileSync(PID_FILE, String(process.pid));
-    process.stderr.write(`Daemon ready. PID: ${process.pid}\n`);
+    log(`Daemon ready. PID: ${process.pid}`);
     process.stdout.write('ready\n');
   });
 
@@ -404,7 +441,23 @@ Examples:
 } else if (cmd === 'open') {
   const pid = isDaemonRunning();
   if (pid) {
-    console.log(`Already running (PID: ${pid})`);
+    // Verify the daemon is actually responsive
+    try {
+      await sendCommand('wait', ['0']);
+      console.log(`Already running (PID: ${pid})`);
+    } catch {
+      // Stale daemon — kill and restart
+      log(`Stale daemon (PID: ${pid}), restarting...`);
+      try { process.kill(pid, 'SIGKILL'); } catch {}
+      try { execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' }); } catch {}
+      try { fs.unlinkSync(SOCKET); } catch {}
+      try { fs.unlinkSync(PID_FILE); } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+      const uddArg = args.find(a => a.startsWith('--user-data-dir'));
+      const userDataDir = uddArg ? uddArg.split('=')[1] : undefined;
+      await spawnDaemon(userDataDir);
+      console.log('WSO2 Integrator is ready. (restarted)');
+    }
   } else {
     const uddArg = args.find(a => a.startsWith('--user-data-dir'));
     const userDataDir = uddArg ? uddArg.split('=')[1] : undefined;

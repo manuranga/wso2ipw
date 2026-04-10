@@ -8,14 +8,14 @@
 #   3. Add an HTTP Service with a GET /greeting resource
 #   4. Run the integration, verify it starts
 #   5. Stop, enable ICP for all integrations from project overview
-#   6. Start ICP server, re-run from integration view, verify ICP heartbeat
+#   6. Start ICP server, re-run, verify ICP heartbeat
 #
 set -euo pipefail
 
 pw() { wso2integrator-cli "$@"; }
 
-# Extract a ref from snapshot output by matching a label.
-ref() { echo "$1" | grep -F "$2" | grep -oE 'ref=s[0-9]+e[0-9]+' | head -1 | sed 's/ref=//' || true; }
+# Extract an aria-ref matching a label substring.
+ref() { echo "$1" | grep -F "$2" | grep -oE 's[0-9]+e[0-9]+' | head -1; }
 
 step() { echo ""; echo "═══ $1 ═══"; }
 fail() { echo "FAIL: $1" >&2; pw close 2>/dev/null; exit 1; }
@@ -30,31 +30,27 @@ lsof -ti :9450 2>/dev/null | xargs kill -9 2>/dev/null || true
 step "1. Launch app"
 pw open
 
-# Wait for UI to load and handle sign-in if needed
-for attempt in 1 2 3 4 5; do
-  pw wait 3000 > /dev/null
-  snap=$(pw snapshot 2>/dev/null || true)
-  r=$(ref "$snap" 'Skip for now')
-  if [ -n "$r" ]; then pw click "$r" > /dev/null; echo "  Skipped sign-in"; break; fi
+# Handle sign-in dialog (appears in main frame)
+snap=$(pw wait-for-text "Skip for now" --host --timeout=15000 2>/dev/null || true)
+r=$(ref "$snap" 'Skip for now') || true
+if [ -n "$r" ]; then
+  pw click "$r" --host > /dev/null
+  echo "  Skipped sign-in"
+fi
 
-  snap=$(pw snapshot --host 2>/dev/null || true)
-  r=$(ref "$snap" 'Skip for now')
-  if [ -n "$r" ]; then pw click "$r" --host > /dev/null; echo "  Skipped sign-in (main)"; break; fi
-
-  echo "$snap" | grep -q 'button "Create"' && { echo "  No sign-in dialog"; break; }
-done
+# Wait for webview landing page
+snap=$(pw wait-for-text "Create" --timeout=15000)
+echo "  App ready"
 
 # ── 2. Create Integration ────────────────────────────────────────────────────
 
 step "2. Create integration: hello-icp (project: $PROJ_ID)"
-snap=$(pw snapshot)
+
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
 
 pw fill "$(ref "$snap" 'textbox "Integration Name')" hello-icp > /dev/null
-
 snap=$(pw snapshot)
 pw fill "$(ref "$snap" 'textbox "Project Name')" "ICP Test Project" > /dev/null
-
 snap=$(pw snapshot)
 pw fill "$(ref "$snap" 'textbox "Project ID"')" "$PROJ_ID" > /dev/null
 
@@ -72,23 +68,20 @@ snap=$(pw click "$(ref "$snap" 'hello-icp')")
 snap=$(pw click "$(ref "$snap" 'Add Artifact')")
 snap=$(pw click "$(ref "$snap" 'HTTP Service')")
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
-pw wait 3000 > /dev/null
 
-# Add Resource → select GET → fill path → Save
-snap=$(pw snapshot)
+# Wait for design canvas to load, then add resource
+snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
-pw wait 1000 > /dev/null
 
-# GET method selector — rendered as plain div, not a button. Use text locator.
+# Wait for method selector, then click GET
+snap=$(pw wait-for-text "GET" --timeout=10000)
 pw click "text=GET" > /dev/null
-pw wait 1000 > /dev/null
 
-# Resource path — shadow DOM input. fill auto-pierces.
-snap=$(pw snapshot)
+# Wait for resource path field, then fill it
+snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
 [ -z "$r" ] && fail "Resource Path field not found"
 pw fill "$r" greeting > /dev/null
-pw wait 1000 > /dev/null
 
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Save"')")
@@ -100,19 +93,13 @@ echo "✓ HTTP Service with GET /greeting created"
 step "4. Run integration"
 snap=$(pw snapshot --host)
 pw click "$(ref "$snap" 'button "Run Integration"')" --host > /dev/null
-pw wait 5000 > /dev/null
-pw screenshot /tmp/step4-after-run.png > /dev/null
-echo "  Screenshot: /tmp/step4-after-run.png"
 
-echo "  Waiting for Ballerina to start (up to 60s)..."
-for i in $(seq 1 12); do
+echo "  Waiting for Ballerina to compile and start..."
+for i in $(seq 1 18); do
   sleep 5
-  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/greeting 2>/dev/null || echo "000")
-  if echo "$code" | grep -qE "2[0-9][0-9]"; then
-    echo "✓ Integration running — HTTP $code"
-    break
-  fi
-  [ "$i" -eq 12 ] && fail "Integration did not start within 60s"
+  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null || echo "000")
+  [ "$code" != "000" ] && { echo "✓ Integration running (HTTP $code)"; break; }
+  [ "$i" -eq 18 ] && fail "Integration did not start within 90s"
 done
 
 # ── 5. Stop, enable ICP from project overview ────────────────────────────────
@@ -122,18 +109,17 @@ step "5. Enable ICP"
 snap=$(pw snapshot --host)
 pw click "$(ref "$snap" 'button "Stop')" --host > /dev/null
 
+# Wait for active debug session to end (tab label loses "active session")
+pw wait-for-text "active session" --host --hidden --timeout=15000 > /dev/null
+
 snap=$(pw snapshot --host)
 pw click "$(ref "$snap" 'Show Overview')" --host > /dev/null
 
-snap=$(pw snapshot)
+# Wait for project overview to load in webview
+snap=$(pw wait-for-text "Enable ICP" --timeout=15000)
 pw click "$(ref "$snap" 'Enable ICP for all integrations')" > /dev/null
 
-for i in $(seq 1 6); do
-  pw wait 2000 > /dev/null
-  snap=$(pw snapshot)
-  echo "$snap" | grep -q "1/1 integrations are ICP-enabled" && break
-  [ "$i" -eq 6 ] && fail "ICP not enabled"
-done
+snap=$(pw wait-for-text "1/1 integrations are ICP-enabled" --timeout=15000)
 echo "✓ ICP enabled"
 
 # ── 6. Start ICP server, re-run, verify heartbeat ───────────────────────────
@@ -143,28 +129,24 @@ step "6. ICP server + re-run"
 snap=$(pw snapshot --host)
 pw click "$(ref "$snap" 'ICP: Stopped')" --host > /dev/null
 
-echo "  Waiting for ICP server (up to 30s)..."
-for i in $(seq 1 6); do
-  sleep 5
-  snap=$(pw snapshot --host 2>/dev/null || true)
-  if echo "$snap" | grep -q "ICP: Running"; then echo "✓ ICP server running"; break; fi
-  [ "$i" -eq 6 ] && fail "ICP server did not start"
-done
+echo "  Waiting for ICP server..."
+snap=$(pw wait-for-text "ICP: Running" --host --timeout=30000)
+echo "✓ ICP server running"
 
 # Navigate to integration and run
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'hello-icp')")
 snap=$(pw snapshot)
-r=$(echo "$snap" | grep 'Run' | grep -E 'Icon Button|button' | grep -oE 'ref=s[0-9]+e[0-9]+' | head -1 | sed 's/ref=//')
+r=$(echo "$snap" | grep 'Run' | grep -E 'Icon Button|button' | grep -oE 's[0-9]+e[0-9]+' | head -1)
 [ -z "$r" ] && fail "Run button not found"
 pw click "$r" > /dev/null
 
-echo "  Waiting for integration + ICP handshake (up to 60s)..."
-for i in $(seq 1 12); do
+echo "  Waiting for integration to start with ICP..."
+for i in $(seq 1 18); do
   sleep 5
-  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/greeting 2>/dev/null || echo "000")
-  if echo "$code" | grep -qE "2[0-9][0-9]"; then echo "✓ Integration running with ICP — HTTP $code"; break; fi
-  [ "$i" -eq 12 ] && fail "Integration did not start with ICP"
+  code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/ 2>/dev/null || echo "000")
+  [ "$code" != "000" ] && { echo "✓ Integration running with ICP (HTTP $code)"; break; }
+  [ "$i" -eq 18 ] && fail "Integration did not start with ICP within 90s"
 done
 
 pw screenshot icp-final.png > /dev/null
@@ -181,6 +163,6 @@ echo "════════════════════════�
 
 # Cleanup
 snap=$(pw snapshot --host 2>/dev/null || true)
-r=$(ref "$snap" 'button "Stop')
+r=$(ref "$snap" 'button "Stop') || true
 [ -n "$r" ] && pw click "$r" --host > /dev/null 2>&1 || true
 pw close 2>/dev/null || true

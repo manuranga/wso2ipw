@@ -261,6 +261,16 @@ async function startDaemonProcess() {
         return `Waited ${ms}ms`;
       }
 
+      case 'wait-for-text': {
+        // wait-for-text <text> [--host] [--timeout=N] [--hidden]
+        const text = args.find(a => !a.startsWith('-'));
+        if (!text) throw new Error('Usage: wait-for-text <text> [--host] [--timeout=N] [--hidden]');
+        const timeout = parseInt(parseFlag(args, 'timeout') ?? '30000');
+        const state = args.includes('--hidden') ? 'hidden' : 'visible';
+        await pickFrame(args).getByText(text).first().waitFor({ state, timeout });
+        return `Text ${state}: ${text}\n` + await snapshot(which);
+      }
+
       case 'close': {
         await app.close();
         cleanup();
@@ -389,6 +399,7 @@ Commands:
   eval <js> [--host]           Evaluate JS in frame
   screenshot [file]            Save screenshot
   wait [ms]                    Sleep (default 2000ms)
+  wait-for-text <text> [--host] Wait for text to appear (or disappear with --hidden)
   close                        Quit the app
 
 Targeting:
@@ -399,6 +410,8 @@ Targeting:
 Flags:
   --host                Target VS Code chrome instead of guest (WSO2 extension UI)
   --force / --no-force  Override pointer-event checks on click
+  --timeout=N           Timeout in ms (for wait-for)
+  --hidden              Wait for element to disappear (wait-for)
   --user-data-dir=<p>   Persistent profile directory
 
 Environment:

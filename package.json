@@ -1,13 +1,13 @@
 {
-  "name": "wso2integrator-cli",
+  "name": "wso2ipw",
   "version": "0.1.0",
   "description": "CLI to automate WSO2 Integrator (Electron app) via Playwright",
   "type": "module",
   "bin": {
-    "wso2integrator-cli": "./wso2integrator-cli.mjs"
+    "wso2ipw": "./wso2ipw.mjs"
   },
   "files": [
-    "wso2integrator-cli.mjs",
+    "wso2ipw.mjs",
     "examples/"
   ],
   "keywords": [

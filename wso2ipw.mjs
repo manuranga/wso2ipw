@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * wso2integrator-cli — Drive WSO2 Integrator (Electron/VS Code fork) via Playwright.
+ * wso2ipw — Drive WSO2 Integrator (Electron/VS Code fork) via Playwright.
  *
  * Architecture:
  *   open  → spawns a detached daemon that launches Electron via Playwright's
@@ -17,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import os from 'os';
+import crypto from 'crypto';
 import { spawn, execSync } from 'child_process';
 
 // ─── Config ─────────────────────────────────────────────────────────────────
@@ -28,11 +29,26 @@ const APP_PATHS = [
   path.join(os.homedir(), '.local/share/wso2-integrator/wso2-integrator'),
 ];
 
-const STATE_DIR = path.join(os.homedir(), '.wso2integrator-cli');
-const SOCKET = path.join(STATE_DIR, 'daemon.sock');
-const PID_FILE = path.join(STATE_DIR, 'daemon.pid');
-const ERR_LOG = path.join(STATE_DIR, 'daemon.err');
-const DAEMON_LOG = path.join(STATE_DIR, 'daemon.log');
+const BASE_DIR = path.join(os.homedir(), '.wso2ipw');
+
+// Workspace-scoped state dir: ~/.wso2ipw/<sha1(cwd)[0:16]>/
+// Daemon receives the resolved dir via WSO2I_STATE_DIR env var.
+function workspaceDir(cwd) {
+  const hash = crypto.createHash('sha1').update(cwd).digest('hex').substring(0, 16);
+  return path.join(BASE_DIR, hash);
+}
+
+function stateDir() {
+  return process.env.WSO2I_STATE_DIR || workspaceDir(process.cwd());
+}
+
+function statePath(name) { return path.join(stateDir(), name); }
+const SOCKET  = () => statePath('daemon.sock');
+const PID_FILE = () => statePath('daemon.pid');
+const ERR_LOG  = () => statePath('daemon.err');
+const DAEMON_LOG = () => statePath('daemon.log');
+// Written by daemon so clients can discover which cwd this dir belongs to.
+const SESSION_FILE = () => statePath('session.json');
 
 function findApp() {
   if (process.env.WSO2_INTEGRATOR_PATH) {
@@ -47,7 +63,7 @@ function findApp() {
 function log(msg) {
   const line = `[${new Date().toISOString().slice(11, 23)}] ${msg}\n`;
   process.stderr.write(line);
-  try { fs.appendFileSync(DAEMON_LOG, line); } catch {}
+  try { fs.appendFileSync(DAEMON_LOG(), line); } catch {}
 }
 
 function parseFlag(args, name) {
@@ -91,11 +107,11 @@ async function startDaemonProcess() {
   const { _electron: electron } = await import('playwright');
   const appPath = findApp();
 
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  try { fs.unlinkSync(SOCKET); } catch {}
+  fs.mkdirSync(stateDir(), { recursive: true });
+  try { fs.unlinkSync(SOCKET()); } catch {}
 
   const userDataDir = process.env.WSO2I_USER_DATA_DIR
-    || fs.mkdtempSync(path.join(os.tmpdir(), 'wso2integrator-cli-'));
+    || fs.mkdtempSync(path.join(os.tmpdir(), 'wso2ipw-'));
 
   log(`Launching: ${appPath}`);
   log(`User data: ${userDataDir}`);
@@ -303,13 +319,21 @@ async function startDaemonProcess() {
   });
 
   function cleanup() {
-    try { fs.unlinkSync(SOCKET); } catch {}
-    try { fs.unlinkSync(PID_FILE); } catch {}
+    try { fs.unlinkSync(SOCKET()); } catch {}
+    try { fs.unlinkSync(PID_FILE()); } catch {}
+    try { fs.unlinkSync(SESSION_FILE()); } catch {}
     server.close();
   }
 
-  server.listen(SOCKET, () => {
-    fs.writeFileSync(PID_FILE, String(process.pid));
+  server.listen(SOCKET(), () => {
+    fs.writeFileSync(PID_FILE(), String(process.pid));
+    fs.writeFileSync(SESSION_FILE(), JSON.stringify({
+      pid: process.pid,
+      socketPath: SOCKET(),
+      userDataDir,
+      cwd: process.env.WSO2I_ORIG_CWD || process.cwd(),
+      timestamp: Date.now(),
+    }, null, 2));
     log(`Daemon ready. PID: ${process.pid}`);
     process.stdout.write('ready\n');
   });
@@ -322,9 +346,10 @@ async function startDaemonProcess() {
 
 function sendCommand(cmd, args) {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(SOCKET))
-      return reject(new Error('App not running. Run: wso2integrator-cli open'));
-    const socket = net.createConnection(SOCKET, () => {
+    const sock = SOCKET();
+    if (!fs.existsSync(sock))
+      return reject(new Error('App not running. Run: wso2ipw open'));
+    const socket = net.createConnection(sock, () => {
       writeMessage(socket, { cmd, args, cwd: process.cwd() });
     });
     readMessage(socket).then(res => {
@@ -336,7 +361,7 @@ function sendCommand(cmd, args) {
 
 function isDaemonRunning() {
   try {
-    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8'));
+    const pid = parseInt(fs.readFileSync(PID_FILE(), 'utf-8'));
     process.kill(pid, 0);
     return pid;
   } catch { return false; }
@@ -346,9 +371,12 @@ function spawnDaemon(userDataDir) {
   return new Promise((resolve, reject) => {
     try { execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' }); } catch {}
 
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    const err = fs.openSync(ERR_LOG, 'w');
+    const dir = stateDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const err = fs.openSync(ERR_LOG(), 'w');
     const env = { ...process.env };
+    env.WSO2I_STATE_DIR = dir;
+    env.WSO2I_ORIG_CWD = process.cwd();
     if (userDataDir) env.WSO2I_USER_DATA_DIR = userDataDir;
 
     const child = spawn(process.execPath, [import.meta.filename, '__daemon__'], {
@@ -365,7 +393,7 @@ function spawnDaemon(userDataDir) {
     });
     child.on('close', code => {
       if (!output.includes('ready')) {
-        const errLog = fs.readFileSync(ERR_LOG, 'utf-8').trim();
+        const errLog = fs.readFileSync(ERR_LOG(), 'utf-8').trim();
         reject(new Error(`Daemon exited (${code})${errLog ? '\n' + errLog : ''}`));
       }
     });
@@ -384,9 +412,9 @@ if (cmd === '__daemon__') {
   startDaemonProcess().catch(e => { process.stderr.write(e.message + '\n'); process.exit(1); });
 
 } else if (!cmd || cmd === '--help' || cmd === '-h') {
-  console.log(`wso2integrator-cli — Automate WSO2 Integrator via Playwright
+  console.log(`wso2ipw — Automate WSO2 Integrator via Playwright
 
-Usage: wso2integrator-cli <command> [args]
+Usage: wso2ipw <command> [args]
 
 Commands:
   open [--user-data-dir=p]     Launch app (fresh temp profile by default)
@@ -422,19 +450,19 @@ Environment:
   if (pid) {
     try {
       await sendCommand('wait', ['0']);
-      console.log(`Already running (PID: ${pid})`);
+      console.log(`Already running (PID: ${pid}). Log: ${DAEMON_LOG()}`);
     } catch {
       try { process.kill(pid, 'SIGKILL'); } catch {}
       try { execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' }); } catch {}
-      try { fs.unlinkSync(SOCKET); } catch {}
-      try { fs.unlinkSync(PID_FILE); } catch {}
+      try { fs.unlinkSync(SOCKET()); } catch {}
+      try { fs.unlinkSync(PID_FILE()); } catch {}
       await new Promise(r => setTimeout(r, 2000));
       await spawnDaemon(parseFlag(args, 'user-data-dir'));
-      console.log('WSO2 Integrator is ready. (restarted)');
+      console.log(`WSO2 Integrator is ready. (restarted)\nLog: ${DAEMON_LOG()}`);
     }
   } else {
     await spawnDaemon(parseFlag(args, 'user-data-dir'));
-    console.log('WSO2 Integrator is ready.');
+    console.log(`WSO2 Integrator is ready.\nLog: ${DAEMON_LOG()}`);
   }
 
 } else {

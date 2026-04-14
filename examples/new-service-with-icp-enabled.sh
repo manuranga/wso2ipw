@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-pw() { wso2integrator-cli "$@"; }
+pw() { wso2ipw "$@"; }
 
 # Extract an aria-ref matching a label substring.
 ref() { echo "$1" | grep -F "$2" | grep -oE 's[0-9]+e[0-9]+' | head -1; }
@@ -168,4 +168,4 @@ echo "════════════════════════�
 snap=$(pw snapshot --host 2>/dev/null || true)
 r=$(ref "$snap" 'button "Stop') || true
 [ -n "$r" ] && pw click "$r" --host > /dev/null 2>&1 || true
-pw close 2>/dev/null || true
+#pw close 2>/dev/null || true

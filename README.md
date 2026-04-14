@@ -1,4 +1,4 @@
-# wso2integrator-cli
+# wso2ipw
 
 CLI to automate [WSO2 Integrator](https://wso2.com/integrator/) via [Playwright](https://playwright.dev/).
 
@@ -7,7 +7,7 @@ Built on Playwright's `_electron.launch()` — full access to the app's UI inclu
 ## Install
 
 ```bash
-npm install -g wso2integrator-cli
+npm install -g wso2ipw
 ```
 
 WSO2 Integrator must be installed. The CLI auto-detects it at standard locations, or set `WSO2_INTEGRATOR_PATH`.
@@ -16,20 +16,20 @@ WSO2 Integrator must be installed. The CLI auto-detects it at standard locations
 
 ```bash
 # Launch (fresh profile each time by default)
-wso2integrator-cli open
+wso2ipw open
 
 # See what's on screen
-wso2integrator-cli snapshot
+wso2ipw snapshot
 
 # Interact using refs from the snapshot
-wso2integrator-cli click s1e29 --force
-wso2integrator-cli fill s2e33 "my-integration"
+wso2ipw click s1e29 --force
+wso2ipw fill s2e33 "my-integration"
 
 # Screenshot
-wso2integrator-cli screenshot page.png
+wso2ipw screenshot page.png
 
 # Done
-wso2integrator-cli close
+wso2ipw close
 ```
 
 ## Commands
@@ -57,18 +57,18 @@ wso2integrator-cli close
 ## Architecture
 
 ```
-wso2integrator-cli open
+wso2ipw open
         │
         ├─ spawns detached daemon process
         │       │
         │       ├─ Playwright _electron.launch()
         │       │       → full frame access including webviews
         │       │
-        │       └─ listens on Unix socket (~/.wso2integrator-cli/daemon.sock)
+        │       └─ listens on Unix socket (~/.wso2ipw/<hash>/daemon.sock)
         │
         └─ returns when daemon signals "ready"
 
-wso2integrator-cli <command>
+wso2ipw <command>
         │
         └─ connects to daemon socket → sends command → prints result
 ```

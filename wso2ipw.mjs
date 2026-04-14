@@ -142,13 +142,16 @@ async function startDaemonProcess() {
       try { if (f.url().includes('vscode-webview://')) return _webviewFrame = f; }
       catch {}
     }
-    return window.frames()[0];
+    return null;
   }
 
   function mainFrame() { return window.frames()[0]; }
 
   function pickFrame(args) {
-    return args.includes('--host') ? mainFrame() : webviewFrame();
+    if (args.includes('--host')) return mainFrame();
+    const f = webviewFrame();
+    if (!f) throw new Error('Guest frame not available. Retry or use --host.');
+    return f;
   }
 
   function whichFrame(args) {
@@ -161,21 +164,26 @@ async function startDaemonProcess() {
     while (Date.now() < deadline) {
       _webviewFrame = null;
       const f = webviewFrame();
-      try { if (await f.evaluate(() => document.querySelectorAll('button').length) > 0) return f; }
-      catch {}
+      if (f) {
+        try { if (await f.evaluate(() => document.querySelectorAll('button').length) > 0) return f; }
+        catch {}
+      }
       await window.waitForTimeout(200);
     }
-    return webviewFrame();
+    throw new Error('Guest frame not available (timeout)');
   }
 
   // ── Snapshot ──
 
   async function snapshot(which) {
-    const frame = which === 'host' ? mainFrame() : webviewFrame();
+    if (which === 'host')
+      return await mainFrame().locator('body').ariaSnapshot({ ref: true });
+    const frame = webviewFrame();
+    if (!frame)
+      return await (await ensureWebviewFrame()).locator('body').ariaSnapshot({ ref: true });
     try {
       return await frame.locator('body').ariaSnapshot({ ref: true });
     } catch {
-      if (which === 'host') throw new Error('Host frame unavailable');
       return await (await ensureWebviewFrame()).locator('body').ariaSnapshot({ ref: true });
     }
   }

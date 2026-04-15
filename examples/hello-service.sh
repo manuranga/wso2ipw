@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # End-to-end test: Create an HTTP hello world service and verify it responds.
+# Uses unified g:/h: ref prefixes (no --host flag).
 #
 # Flow:
 #   1. Open WSO2 Integrator
@@ -13,7 +14,8 @@ set -euo pipefail
 
 pw() { wso2ipw "$@"; }
 
-ref() { echo "$1" | grep -F "$2" | grep -oE 's[0-9]+e[0-9]+' | head -1; }
+# Extract prefixed ref (g:s1e29 or h:s1e29) matching a label fragment
+ref() { echo "$1" | grep -F "$2" | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1; }
 
 step() { echo ""; echo "═══ $1 ═══"; }
 fail() { echo "FAIL: $1" >&2; pw close 2>/dev/null; exit 1; }
@@ -25,10 +27,10 @@ PROJ_ID="hello$(date +%s)"
 step "1. Launch app"
 pw open
 
-snap=$(pw wait-for-text "Skip for now" --host --timeout=15000 2>/dev/null || true)
+snap=$(pw wait-for-text "Skip for now" --timeout=15000 2>/dev/null || true)
 r=$(ref "$snap" 'Skip for now') || true
 if [ -n "$r" ]; then
-  pw click "$r" --host > /dev/null
+  pw click "$r" > /dev/null
   echo "  Skipped sign-in"
 fi
 
@@ -68,7 +70,7 @@ snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "text=GET" > /dev/null
+pw click "g:text=GET" > /dev/null
 
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
@@ -89,11 +91,11 @@ step "4. Add Return node"
 pw wait-for-text "Error Handler" --timeout=15000 > /dev/null
 
 # The "+" add-node button is an SVG element outside the aria tree
-pw eval 'document.querySelector("[data-testid=empty-node-add-button-1]")?.dispatchEvent(new MouseEvent("click", {bubbles:true}))' > /dev/null
+pw eval 'g:document.querySelector("[data-testid=empty-node-add-button-1]")?.dispatchEvent(new MouseEvent("click", {bubbles:true}))' > /dev/null
 snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
 
-pw eval 'document.querySelectorAll(".css-lbgul4").forEach(e => { if (e.textContent==="Return") e.scrollIntoView() })' > /dev/null
-pw click "text=Return" > /dev/null
+pw eval 'g:document.querySelectorAll(".css-lbgul4").forEach(e => { if (e.textContent==="Return") e.scrollIntoView() })' > /dev/null
+pw click "g:text=Return" > /dev/null
 snap=$(pw wait-for-text "Expression" --timeout=10000)
 
 r=$(ref "$snap" 'textbox')
@@ -116,8 +118,8 @@ echo "✓ Verified in generated code"
 # ── 5. Run and verify ────────────────────────────────────────────────────────
 
 step "5. Run integration"
-snap=$(pw snapshot --host)
-pw click "$(ref "$snap" 'button "Run Integration"')" --host > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'button "Run Integration"')" > /dev/null
 
 echo "  Waiting for Ballerina to compile and start..."
 for i in $(seq 1 24); do
@@ -133,11 +135,10 @@ echo ""
 echo "════════════════════════════════════════════"
 echo "  ALL STEPS PASSED ✓"
 echo "  Project: $PROJ_ID"
-echo "  Screenshot: hello-service-final.png"
 echo "════════════════════════════════════════════"
 
 # Cleanup
-snap=$(pw snapshot --host 2>/dev/null || true)
+snap=$(pw snapshot 2>/dev/null || true)
 r=$(ref "$snap" 'button "Stop') || true
-[ -n "$r" ] && pw click "$r" --host > /dev/null 2>&1 || true
+[ -n "$r" ] && pw click "$r" > /dev/null 2>&1 || true
 pw close 2>/dev/null || true

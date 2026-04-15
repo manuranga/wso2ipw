@@ -8,9 +8,9 @@
  *   other → client connects to the daemon socket, sends the command, prints result.
  *
  * The app has two targetable frames:
- *   host  — VS Code chrome (sidebar, toolbar, status bar, terminal)
- *   guest — WSO2 extension UI (landing page, design canvas, forms)
- * Commands default to guest; pass --host to target VS Code chrome.
+ *   host  (h:) — VS Code chrome (sidebar, toolbar, status bar, terminal)
+ *   guest (g:) — WSO2 extension UI (landing page, design canvas, forms)
+ * All ref-targeting commands require a g: or h: prefix to pick the frame.
  */
 
 import fs from 'fs';
@@ -131,15 +131,11 @@ async function startDaemonProcess() {
 
   // ── Frame resolution ──
 
-  let _webviewFrame = null;
-
   function webviewFrame() {
-    if (_webviewFrame) {
-      try { _webviewFrame.url(); return _webviewFrame; }
-      catch { _webviewFrame = null; }
-    }
+    // Always scan: frame references go stale after navigation (e.g. sign-in dismiss).
+    // Pick the deepest vscode-webview:// frame (last in reverse = innermost iframe with content).
     for (const f of window.frames().reverse()) {
-      try { if (f.url().includes('vscode-webview://')) return _webviewFrame = f; }
+      try { if (f.url().includes('vscode-webview://')) return f; }
       catch {}
     }
     return null;
@@ -147,22 +143,29 @@ async function startDaemonProcess() {
 
   function mainFrame() { return window.frames()[0]; }
 
-  function pickFrame(args) {
-    if (args.includes('--host')) return mainFrame();
-    const f = webviewFrame();
-    if (!f) throw new Error('Guest frame not available. Retry or use --host.');
-    return f;
+  // ── Ref prefix parsing ──
+
+  function parsePrefix(target) {
+    const m = target.match(/^([gh]):(.+)$/s);
+    if (!m) {
+      if (/^s\d+e\d+$/.test(target))
+        throw new Error(`Missing frame prefix. Use g:${target} or h:${target}`);
+      throw new Error(`Missing frame prefix. Use g:${target} or h:${target}`);
+    }
+    return { frame: m[1], target: m[2] };
   }
 
-  function whichFrame(args) {
-    return args.includes('--host') ? 'host' : 'guest';
+  function frameFor(prefix) {
+    if (prefix === 'h') return mainFrame();
+    const f = webviewFrame();
+    if (!f) throw new Error('Guest frame not available');
+    return f;
   }
 
   // Poll until a live webview frame with buttons exists.
   async function ensureWebviewFrame(timeoutMs = 10000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      _webviewFrame = null;
       const f = webviewFrame();
       if (f) {
         try { if (await f.evaluate(() => document.querySelectorAll('button').length) > 0) return f; }
@@ -175,9 +178,7 @@ async function startDaemonProcess() {
 
   // ── Snapshot ──
 
-  async function snapshot(which) {
-    if (which === 'host')
-      return await mainFrame().locator('body').ariaSnapshot({ ref: true });
+  async function snapshotGuest() {
     const frame = webviewFrame();
     if (!frame)
       return await (await ensureWebviewFrame()).locator('body').ariaSnapshot({ ref: true });
@@ -188,11 +189,33 @@ async function startDaemonProcess() {
     }
   }
 
+  async function snapshotHost() {
+    return await mainFrame().locator('body').ariaSnapshot({ ref: true });
+  }
+
+  function prefixRefs(snap, prefix) {
+    return snap.replace(/ref=s/g, `ref=${prefix}:s`);
+  }
+
+  async function unifiedSnapshot() {
+    const [guest, host] = await Promise.all([
+      snapshotGuest().catch(() => null),
+      snapshotHost(),
+    ]);
+    const sections = [];
+    if (guest !== null) sections.push(`- guest:\n${indent(prefixRefs(guest, 'g'))}`);
+    sections.push(`- host:\n${indent(prefixRefs(host, 'h'))}`);
+    return sections.join('\n');
+  }
+
+  function indent(text) {
+    return text.split('\n').map(l => '  ' + l).join('\n');
+  }
+
   // After a mutation: brief settle, then snapshot.
-  // 500ms is enough for React re-renders; frame destruction is caught by snapshot().
-  async function settledSnapshot(which) {
+  async function settledSnapshot() {
     await window.waitForTimeout(500);
-    return await snapshot(which);
+    return await unifiedSnapshot();
   }
 
   // ── Locator resolution ──
@@ -211,12 +234,10 @@ async function startDaemonProcess() {
   // ── Command handler ──
 
   async function handleCommand(cmd, args) {
-    const which = whichFrame(args);
-
     switch (cmd) {
 
       case 'snapshot':
-        return await snapshot(which);
+        return await unifiedSnapshot();
 
       case 'screenshot': {
         const file = args.find(a => !a.startsWith('-'))
@@ -229,22 +250,26 @@ async function startDaemonProcess() {
 
       case 'click':
       case 'dblclick': {
-        const target = args.find(a => !a.startsWith('-'));
-        if (!target) throw new Error(`Usage: ${cmd} <target> [--force] [--host]`);
+        const raw = args.find(a => !a.startsWith('-'));
+        if (!raw) throw new Error(`Usage: ${cmd} <g:|h:><target> [--force]`);
+        const { frame: prefix, target } = parsePrefix(raw);
+        const frame = frameFor(prefix);
         const force = args.includes('--no-force') ? false
-          : (args.includes('--force') || which === 'guest');
-        const locator = resolveLocator(pickFrame(args), target);
+          : (args.includes('--force') || prefix === 'g');
+        const locator = resolveLocator(frame, target);
         const opts = { timeout: 5000, force };
         if (cmd === 'dblclick') await locator.dblclick(opts);
         else await locator.click(opts);
-        return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${target}\n` + await settledSnapshot(which);
+        return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${raw}\n` + await settledSnapshot();
       }
 
       case 'fill': {
-        const target = args[0];
-        if (!target || args.length < 2) throw new Error('Usage: fill <target> <text> [--host]');
-        const text = args.filter(a => a !== target && !a.startsWith('-')).join(' ');
-        const locator = resolveLocator(pickFrame(args), target);
+        const raw = args[0];
+        if (!raw || args.length < 2) throw new Error('Usage: fill <g:|h:><target> <text>');
+        const { frame: prefix, target } = parsePrefix(raw);
+        const frame = frameFor(prefix);
+        const text = args.filter(a => a !== raw && !a.startsWith('-')).join(' ');
+        const locator = resolveLocator(frame, target);
         // Shadow DOM inputs (vscode-text-field) need focus+keyboard instead of fill()
         const hasShadowInput = await locator.evaluate(el =>
           !!el.shadowRoot?.querySelector('input, textarea')
@@ -258,7 +283,7 @@ async function startDaemonProcess() {
         } else {
           await locator.fill(text, { timeout: 5000 });
         }
-        return `Filled: ${target}\n` + await settledSnapshot(which);
+        return `Filled: ${raw}\n` + await settledSnapshot();
       }
 
       case 'type': {
@@ -274,9 +299,13 @@ async function startDaemonProcess() {
       }
 
       case 'eval': {
-        if (!args[0]) throw new Error('Usage: eval <js> [--host]');
-        const js = args.filter(a => !a.startsWith('-')).join(' ');
-        return String(await pickFrame(args).evaluate(js));
+        const raw = args[0];
+        if (!raw) throw new Error('Usage: eval <g:|h:><js>');
+        const { frame: prefix, target: js } = parsePrefix(raw);
+        // Remaining non-flag args are part of the JS expression
+        const rest = args.slice(1).filter(a => !a.startsWith('-'));
+        const fullJs = rest.length ? js + ' ' + rest.join(' ') : js;
+        return String(await frameFor(prefix).evaluate(fullJs));
       }
 
       case 'wait': {
@@ -286,13 +315,48 @@ async function startDaemonProcess() {
       }
 
       case 'wait-for-text': {
-        // wait-for-text <text> [--host] [--timeout=N] [--hidden]
         const text = args.find(a => !a.startsWith('-'));
-        if (!text) throw new Error('Usage: wait-for-text <text> [--host] [--timeout=N] [--hidden]');
+        if (!text) throw new Error('Usage: wait-for-text <text> [--timeout=N] [--hidden]');
         const timeout = parseInt(parseFlag(args, 'timeout') ?? '30000');
-        const state = args.includes('--hidden') ? 'hidden' : 'visible';
-        await pickFrame(args).getByText(text).first().waitFor({ state, timeout });
-        return `Text ${state}: ${text}\n` + await snapshot(which);
+        const hidden = args.includes('--hidden');
+
+        if (hidden) {
+          // Wait for text to disappear from BOTH frames
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            const [guestHas, hostHas] = await Promise.all([
+              (async () => {
+                const f = webviewFrame();
+                if (!f) return false;
+                try { return await f.getByText(text).first().isVisible(); }
+                catch { return false; }
+              })(),
+              mainFrame().getByText(text).first().isVisible().catch(() => false),
+            ]);
+            if (!guestHas && !hostHas)
+              return `Text hidden: ${text}\n` + await unifiedSnapshot();
+            await window.waitForTimeout(200);
+          }
+          throw new Error(`Timeout waiting for text to hide: ${text}`);
+        }
+
+        // Wait for text to appear in EITHER frame (poll to handle guest frame recreation)
+        const deadline2 = Date.now() + timeout;
+        while (Date.now() < deadline2) {
+          const [guestHas, hostHas] = await Promise.all([
+            (async () => {
+              const f = webviewFrame();
+              if (!f) return false;
+              try { return await f.getByText(text).first().isVisible(); }
+              catch { return false; }
+            })(),
+            mainFrame().getByText(text).first().isVisible().catch(() => false),
+          ]);
+          if (guestHas || hostHas)
+            return `Text visible: ${text}\n` + await unifiedSnapshot();
+          await window.waitForTimeout(200);
+        }
+        throw new Error(`Timeout waiting for text: ${text}`);
       }
 
       case 'close': {
@@ -425,29 +489,29 @@ if (cmd === '__daemon__') {
 Usage: wso2ipw <command> [args]
 
 Commands:
-  open [--user-data-dir=p]     Launch app (fresh temp profile by default)
-  snapshot [--host]            Aria tree with element refs
-  click <target> [--host]      Click element (auto --force for guest)
-  dblclick <target> [--host]   Double-click element
-  fill <target> <text> [--host] Fill input field
-  type <text>                  Type via keyboard
-  press <key>                  Press key (Enter, Tab, Meta+k, etc.)
-  eval <js> [--host]           Evaluate JS in frame
-  screenshot [file]            Save screenshot
-  wait [ms]                    Sleep (default 2000ms)
-  wait-for-text <text> [--host] Wait for text to appear (or disappear with --hidden)
-  close                        Quit the app
+  open [--user-data-dir=p]      Launch app (fresh temp profile by default)
+  snapshot                      Aria tree of both frames with prefixed refs
+  click <g:|h:><ref> [--force]  Click element (auto --force for g:)
+  dblclick <g:|h:><ref>         Double-click element
+  fill <g:|h:><ref> <text>      Fill input field
+  type <text>                   Type via keyboard
+  press <key>                   Press key (Enter, Tab, Meta+k, etc.)
+  eval <g:|h:><js>              Evaluate JS in frame
+  screenshot [file]             Save screenshot
+  wait [ms]                     Sleep (default 2000ms)
+  wait-for-text <text>          Wait for text in either frame (--hidden for disappear)
+  close                         Quit the app
 
-Targeting:
-  s1e29                            aria-ref from snapshot
-  "#submit-btn"                    CSS selector
-  "getByRole('button', {name:'X'})" Playwright locator
+Targeting (prefix required):
+  g:s1e29                          guest aria-ref from snapshot
+  h:s1e280                         host aria-ref from snapshot
+  g:"#submit-btn"                  CSS selector in guest
+  h:"getByRole('button', {name:'X'})" Playwright locator in host
 
 Flags:
-  --host                Target VS Code chrome instead of guest (WSO2 extension UI)
   --force / --no-force  Override pointer-event checks on click
-  --timeout=N           Timeout in ms (for wait-for)
-  --hidden              Wait for element to disappear (wait-for)
+  --timeout=N           Timeout in ms (for wait-for-text)
+  --hidden              Wait for text to disappear from both frames
   --user-data-dir=<p>   Persistent profile directory
 
 Environment:

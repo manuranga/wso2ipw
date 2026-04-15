@@ -9,12 +9,12 @@
 set -euo pipefail
 
 pw() { wso2ipw "$@"; }
-ref() { echo "$1" | grep -F "$2" | grep -oE 's[0-9]+e[0-9]+' | head -1 || true; }
+ref() { echo "$1" | grep -F "$2" | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true; }
 step() { echo ""; echo "═══ $1 ═══"; }
 fail() { echo "FAIL: $1" >&2; cleanup; exit 1; }
 
 click_palette_item() {
-  pw eval "
+  pw eval "g:
     for (const e of document.querySelectorAll('.css-lbgul4')) {
       if (e.textContent === '$1') {
         var t = e.parentElement;
@@ -30,14 +30,14 @@ click_palette_item() {
 
 click_add_node() {
   local testid="${1:-empty-node-add-button-1}"
-  pw eval "
+  pw eval "g:
     var btn = document.querySelector('[data-testid=\"$testid\"]');
     if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
   " > /dev/null 2>&1 || true
 }
 
 list_add_buttons() {
-  pw eval "
+  pw eval "g:
     JSON.stringify(
       [...document.querySelectorAll('[data-testid*=add-button]')].map(
         e => e.getAttribute('data-testid')
@@ -51,9 +51,9 @@ MOCK_PID=""
 
 cleanup() {
   [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null || true
-  snap=$(pw snapshot --host 2>/dev/null || true)
+  snap=$(pw snapshot 2>/dev/null || true)
   r=$(ref "$snap" 'button "Stop') || true
-  [ -n "$r" ] && pw click "$r" --host > /dev/null 2>&1 || true
+  [ -n "$r" ] && pw click "$r" > /dev/null 2>&1 || true
   pw close 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -84,9 +84,9 @@ echo "✓ Mock backend ready"
 step "2. Create integration"
 pw open
 
-snap=$(pw wait-for-text "Skip for now" --host --timeout=15000 2>/dev/null || true)
+snap=$(pw wait-for-text "Skip for now" --timeout=15000 2>/dev/null || true)
 r=$(ref "$snap" 'Skip for now')
-[ -n "$r" ] && pw click "$r" --host > /dev/null
+[ -n "$r" ] && pw click "$r" > /dev/null
 
 snap=$(pw wait-for-text "Create" --timeout=15000)
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
@@ -103,19 +103,19 @@ echo "✓ Project created"
 
 step "3. Add POST /route"
 snap=$(pw wait-for-text "ContentRouter" --timeout=15000)
-r=$(echo "$snap" | grep 'paragraph.*ContentRouter' | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+r=$(echo "$snap" | grep 'paragraph.*ContentRouter' | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 snap=$(pw click "$r")
 snap=$(pw wait-for-text "Add Artifact" --timeout=10000)
 snap=$(pw click "$(ref "$snap" 'Add Artifact')")
 snap=$(pw wait-for-text "HTTP Service" --timeout=10000)
-r=$(echo "$snap" | grep 'paragraph.*HTTP Service' | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+r=$(echo "$snap" | grep 'paragraph.*HTTP Service' | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 snap=$(pw click "$r")
 snap=$(pw wait-for-text "Base Path" --timeout=15000)
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
 snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "text=POST" > /dev/null
+pw click "g:text=POST" > /dev/null
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 pw fill "$(ref "$snap" 'textbox "Resource Path')" route > /dev/null
 pw press Tab > /dev/null
@@ -131,9 +131,9 @@ snap=$(pw snapshot)
 pw click "$(ref "$snap" 'Configure')" > /dev/null
 snap=$(pw wait-for-text "Resource Configuration" --timeout=10000)
 
-pw click "text=Define Payload" > /dev/null
+pw click "g:text=Define Payload" > /dev/null
 sleep 2
-pw click "text=Continue with JSON Type" > /dev/null
+pw click "g:text=Continue with JSON Type" > /dev/null
 sleep 2
 
 snap=$(pw snapshot)
@@ -153,19 +153,19 @@ pw wait-for-text "Error Handler" --timeout=15000 > /dev/null
 click_add_node "empty-node-add-button-1"
 snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
 
-pw click "text=Add Connection >> nth=0" > /dev/null
+pw click "g:text=Add Connection >> nth=0" > /dev/null
 pw wait-for-text "Add Connection" --timeout=10000 > /dev/null
 snap=$(pw snapshot)
-conn_search=$(echo "$snap" | grep -F 'textbox "Text field"' | tail -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+conn_search=$(echo "$snap" | grep -F 'textbox "Text field"' | tail -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$conn_search" > /dev/null
 pw type "HTTP" > /dev/null
 sleep 2
 snap=$(pw snapshot)
-r=$(echo "$snap" | grep -B1 "ballerina / http" | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+r=$(echo "$snap" | grep -B1 "ballerina / http" | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$r" > /dev/null
 pw wait-for-text "Url" --timeout=30000 > /dev/null
 snap=$(pw snapshot)
-url_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+url_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$url_field" > /dev/null
 pw type "http://localhost:3333" > /dev/null
 pw press Escape > /dev/null
@@ -193,17 +193,17 @@ echo "$snap" | grep -q 'Condition' || fail "If form not opened"
 echo "  If form opened"
 
 # First, click "Add Else Block" to create the else branch
-pw click "text=Add Else Block" > /dev/null
+pw click "g:text=Add Else Block" > /dev/null
 sleep 1
 echo "  Added Else Block"
 
 # Now type the condition. Use "kind" instead of "type" (reserved keyword in Ballerina)
-cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 [ -z "$cond_field" ] && fail "Condition field not found"
 
 # Re-snapshot after adding else block (refs may change)
 snap=$(pw snapshot)
-cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 
 pw click "$cond_field" > /dev/null
 sleep 1
@@ -226,7 +226,7 @@ if [ -n "$r" ] && [ -z "$disabled" ]; then
 else
   echo "  Condition errors — falling back to 'true'"
   snap=$(pw snapshot)
-  cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+  cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
   pw click "$cond_field" > /dev/null
   pw press Meta+a > /dev/null
   pw press Backspace > /dev/null
@@ -291,9 +291,9 @@ click_palette_item "Return"
 sleep 2
 
 snap=$(pw snapshot)
-r=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+r=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 if [ -z "$r" ]; then
-  r=$(echo "$snap" | grep 'textbox' | grep -v 'Text field' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+  r=$(echo "$snap" | grep 'textbox' | grep -v 'Text field' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 fi
 [ -z "$r" ] && fail "Return expression field not found (then)"
 
@@ -350,9 +350,9 @@ click_palette_item "Return"
 sleep 2
 
 snap=$(pw snapshot)
-r=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+r=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 if [ -z "$r" ]; then
-  r=$(echo "$snap" | grep 'textbox' | grep -v 'Text field' | head -1 | grep -oE 's[0-9]+e[0-9]+' | head -1 || true)
+  r=$(echo "$snap" | grep 'textbox' | grep -v 'Text field' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 fi
 [ -z "$r" ] && fail "Return expression field not found (else)"
 
@@ -387,11 +387,11 @@ fi
 
 step "10. Run & verify"
 
-snap=$(pw snapshot --host)
+snap=$(pw snapshot)
 r=$(ref "$snap" 'button "Run Integration"')
 [ -z "$r" ] && r=$(ref "$snap" 'button "Run"')
 [ -z "$r" ] && fail "Run button not found"
-pw click "$r" --host > /dev/null
+pw click "$r" > /dev/null
 
 echo "  Waiting for Ballerina..."
 ready=false

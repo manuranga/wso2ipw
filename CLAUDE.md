@@ -27,30 +27,33 @@ WSO2 Integrator must be installed.
 ```bash
 wso2ipw open
 wso2ipw snapshot
-wso2ipw click s1e29 --force
-wso2ipw fill s2e33 "my-integration"
+wso2ipw click g:s1e29
+wso2ipw fill g:s2e33 "my-integration"
 wso2ipw screenshot page.png
 wso2ipw close
 ```
 
+## Prefix
+
+Two frames (unified in snapshot output, disambiguated by `g:`/`h:` ref prefix):
+Required for all ref-targeting commands
+
+- g: guest/extension webview, WSO2 extension UI: landing page, design canvas, forms
+- h: host/VS Code chrome, sidebar tree, toolbar, terminal, status bar
+
 ## Commands
 
- - app: open [--user-data-dir=path], close
- - inspect: snapshot [--host], screenshot [file], eval <js> [--host]
- - interact: click/dblclick <ref> [--force] [--host], fill <ref> <text> [--host]
- - keys: type <text>, press <key>
- - util: wait [ms]
- - flags: --host (target VS Code chrome instead of extension webview), --force (bypass overlay/pointer-event checks)
+- app: open [--user-data-dir=path], close
+- inspect: snapshot, screenshot [file], eval <g:|h:><js>
+- interact: click/dblclick <g:|h:><ref> [--force], fill <g:|h:><ref> <text>
+- keys: type <text>, press <key>
+- util: wait [ms], wait-for-text <text> [--timeout=N] [--hidden]
+- flags: --force (bypass overlay/pointer-event checks, default for g:)
 
 ## Architecture
 
 - open    spawn daemon → Playwright Electron → listen on Unix socket → signal ready
 - <cmd>   connect to socket → send command → print result
-
-Two frames:
-
-- **guest** (default) — WSO2 extension UI: landing page, design canvas, forms
-- **host** (`--host`) — VS Code chrome: sidebar tree, toolbar, terminal, status bar
 
 ## Examples
 

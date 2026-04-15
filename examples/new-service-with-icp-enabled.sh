@@ -15,7 +15,7 @@ set -euo pipefail
 pw() { wso2ipw "$@"; }
 
 # Extract an aria-ref matching a label substring.
-ref() { echo "$1" | grep -F "$2" | grep -oE 's[0-9]+e[0-9]+' | head -1; }
+ref() { echo "$1" | grep -F "$2" | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1; }
 
 step() { echo ""; echo "═══ $1 ═══"; }
 fail() { echo "FAIL: $1" >&2; pw close 2>/dev/null; exit 1; }
@@ -31,10 +31,10 @@ step "1. Launch app"
 pw open
 
 # Handle sign-in dialog (appears in main frame)
-snap=$(pw wait-for-text "Skip for now" --host --timeout=15000 2>/dev/null || true)
+snap=$(pw wait-for-text "Skip for now" --timeout=15000 2>/dev/null || true)
 r=$(ref "$snap" 'Skip for now') || true
 if [ -n "$r" ]; then
-  pw click "$r" --host > /dev/null
+  pw click "$r" > /dev/null
   echo "  Skipped sign-in"
 fi
 
@@ -64,9 +64,13 @@ echo "✓ Project created"
 step "3. Add HTTP Service with GET /greeting"
 
 # Enter integration → Add Artifact → HTTP Service → Create
+snap=$(pw wait-for-text "hello-icp" --timeout=15000)
 snap=$(pw click "$(ref "$snap" 'hello-icp')")
+snap=$(pw wait-for-text "Add Artifact" --timeout=10000)
 snap=$(pw click "$(ref "$snap" 'Add Artifact')")
+snap=$(pw wait-for-text "HTTP Service" --timeout=10000)
 snap=$(pw click "$(ref "$snap" 'HTTP Service')")
+snap=$(pw wait-for-text "Base Path" --timeout=15000)
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
 
 # Wait for design canvas to load, then add resource
@@ -75,7 +79,7 @@ pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 
 # Wait for method selector, then click GET
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "text=GET" > /dev/null
+pw click "g:text=GET" > /dev/null
 
 # Wait for resource path field, then fill it
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
@@ -92,8 +96,8 @@ echo "✓ HTTP Service with GET /greeting created"
 # ── 4. Run the integration ───────────────────────────────────────────────────
 
 step "4. Run integration"
-snap=$(pw snapshot --host)
-pw click "$(ref "$snap" 'button "Run Integration"')" --host > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'button "Run Integration"')" > /dev/null
 
 echo "  Waiting for Ballerina to compile and start..."
 for i in $(seq 1 18); do
@@ -108,14 +112,14 @@ done
 
 step "5. Enable ICP"
 
-snap=$(pw snapshot --host)
-pw click "$(ref "$snap" 'button "Stop')" --host > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'button "Stop')" > /dev/null
 
 # Wait for active debug session to end (tab label loses "active session")
-pw wait-for-text "active session" --host --hidden --timeout=15000 > /dev/null
+pw wait-for-text "active session" --hidden --timeout=15000 > /dev/null
 
-snap=$(pw snapshot --host)
-pw click "$(ref "$snap" 'Show Overview')" --host > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'Show Overview')" > /dev/null
 
 # Wait for project overview to load in webview
 snap=$(pw wait-for-text "Enable ICP" --timeout=15000)
@@ -128,18 +132,18 @@ echo "✓ ICP enabled"
 
 step "6. ICP server + re-run"
 
-snap=$(pw snapshot --host)
-pw click "$(ref "$snap" 'ICP: Stopped')" --host > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'ICP: Stopped')" > /dev/null
 
 echo "  Waiting for ICP server..."
-snap=$(pw wait-for-text "ICP: Running" --host --timeout=30000)
+snap=$(pw wait-for-text "ICP: Running" --timeout=30000)
 echo "✓ ICP server running"
 
 # Navigate to integration and run
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'hello-icp')")
 snap=$(pw snapshot)
-r=$(echo "$snap" | grep 'Run' | grep -E 'Icon Button|button' | grep -oE 's[0-9]+e[0-9]+' | head -1)
+r=$(echo "$snap" | grep 'Run' | grep -E 'Icon Button|button' | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1)
 [ -z "$r" ] && fail "Run button not found"
 pw click "$r" > /dev/null
 
@@ -153,7 +157,7 @@ for i in $(seq 1 18); do
 done
 
 pw screenshot icp-final.png > /dev/null
-snap=$(pw snapshot --host)
+snap=$(pw snapshot)
 echo "$snap" | grep -q "ICP: Running" || fail "ICP not running after re-run"
 echo "✓ ICP heartbeat verified"
 
@@ -165,7 +169,7 @@ echo "  Screenshot: icp-final.png"
 echo "════════════════════════════════════════════"
 
 # Cleanup
-snap=$(pw snapshot --host 2>/dev/null || true)
+snap=$(pw snapshot 2>/dev/null || true)
 r=$(ref "$snap" 'button "Stop') || true
-[ -n "$r" ] && pw click "$r" --host > /dev/null 2>&1 || true
+[ -n "$r" ] && pw click "$r" > /dev/null 2>&1 || true
 #pw close 2>/dev/null || true

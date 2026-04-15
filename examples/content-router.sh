@@ -13,39 +13,6 @@ ref() { echo "$1" | grep -F "$2" | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || t
 step() { echo ""; echo "═══ $1 ═══"; }
 fail() { echo "FAIL: $1" >&2; cleanup; exit 1; }
 
-click_palette_item() {
-  pw eval "g:
-    for (const e of document.querySelectorAll('.css-lbgul4')) {
-      if (e.textContent === '$1') {
-        var t = e.parentElement;
-        t.scrollIntoView();
-        t.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}));
-        t.dispatchEvent(new PointerEvent('pointerup', {bubbles:true}));
-        t.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-        break;
-      }
-    }
-  " > /dev/null 2>&1 || true
-}
-
-click_add_node() {
-  local testid="${1:-empty-node-add-button-1}"
-  pw eval "g:
-    var btn = document.querySelector('[data-testid=\"$testid\"]');
-    if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-  " > /dev/null 2>&1 || true
-}
-
-list_add_buttons() {
-  pw eval "g:
-    JSON.stringify(
-      [...document.querySelectorAll('[data-testid*=add-button]')].map(
-        e => e.getAttribute('data-testid')
-      )
-    )
-  " 2>/dev/null || true
-}
-
 PROJ_ID="router$(date +%s)"
 MOCK_PID=""
 
@@ -115,7 +82,7 @@ snap=$(pw click "$(ref "$snap" 'button "Create"')")
 snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "g:text=POST" > /dev/null
+pw click "$(ref "$snap" 'button "POST"')" > /dev/null
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 pw fill "$(ref "$snap" 'textbox "Resource Path')" route > /dev/null
 pw press Tab > /dev/null
@@ -126,14 +93,14 @@ echo "✓ POST /route created"
 # ── 4. Configure payload parameter ───────────────────────────────────────────
 
 step "4. Configure JSON payload"
-pw wait-for-text "Error Handler" --timeout=15000 > /dev/null
-snap=$(pw snapshot)
+snap=$(pw wait-for-text "Error Handler" --timeout=15000)
 pw click "$(ref "$snap" 'Configure')" > /dev/null
 snap=$(pw wait-for-text "Resource Configuration" --timeout=10000)
 
-pw click "g:text=Define Payload" > /dev/null
-sleep 2
-pw click "g:text=Continue with JSON Type" > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'button "Define Payload"')" > /dev/null
+snap=$(pw wait-for-text "Continue with JSON Type" --timeout=10000)
+pw click "$(ref "$snap" 'button "Continue with JSON Type"')" > /dev/null
 sleep 2
 
 snap=$(pw snapshot)
@@ -149,13 +116,12 @@ BAL_FILE=$(find "$BAL_DIR" -name "*.bal" 2>/dev/null | head -1 || true)
 # ── 5. HTTP Connection ───────────────────────────────────────────────────────
 
 step "5. Add HTTP Connection"
-pw wait-for-text "Error Handler" --timeout=15000 > /dev/null
-click_add_node "empty-node-add-button-1"
+snap=$(pw wait-for-text "Error Handler" --timeout=15000)
+pw click "$(ref "$snap" 'button "empty-node-add-button-1"')" > /dev/null
 snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
 
 pw click "g:text=Add Connection >> nth=0" > /dev/null
-pw wait-for-text "Add Connection" --timeout=10000 > /dev/null
-snap=$(pw snapshot)
+snap=$(pw wait-for-text "Add Connection" --timeout=10000)
 conn_search=$(echo "$snap" | grep -F 'textbox "Text field"' | tail -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$conn_search" > /dev/null
 pw type "HTTP" > /dev/null
@@ -163,8 +129,7 @@ sleep 2
 snap=$(pw snapshot)
 r=$(echo "$snap" | grep -B1 "ballerina / http" | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$r" > /dev/null
-pw wait-for-text "Url" --timeout=30000 > /dev/null
-snap=$(pw snapshot)
+snap=$(pw wait-for-text "Url" --timeout=30000)
 url_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$url_field" > /dev/null
 pw type "http://localhost:3333" > /dev/null
@@ -180,20 +145,27 @@ echo "✓ httpClient saved"
 
 step "6. Add If node"
 
-# Palette is stuck in "select node" mode. Click If palette item.
+# Palette is stuck in "select node" mode. Click If palette item (now a pseudoelement).
 sleep 2
+snap=$(pw snapshot)
 for attempt in 1 2 3; do
-  click_palette_item "If"
-  sleep 2
-  snap=$(pw snapshot)
-  echo "$snap" | grep -q 'Condition' && break
+  r=$(ref "$snap" 'button "If"')
+  if [ -n "$r" ]; then
+    pw click "$r" > /dev/null
+    sleep 2
+    snap=$(pw snapshot)
+    echo "$snap" | grep -q 'Condition' && break
+  fi
   echo "  Attempt $attempt: If form not opened"
+  sleep 1
+  snap=$(pw snapshot)
 done
 echo "$snap" | grep -q 'Condition' || fail "If form not opened"
 echo "  If form opened"
 
 # First, click "Add Else Block" to create the else branch
-pw click "g:text=Add Else Block" > /dev/null
+snap=$(pw snapshot)
+pw click "$(ref "$snap" 'button "Add Else Block"')" > /dev/null
 sleep 1
 echo "  Added Else Block"
 
@@ -207,8 +179,6 @@ cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+
 
 pw click "$cond_field" > /dev/null
 sleep 1
-# Type condition: payload.kind == "order"
-# "kind" is not a reserved word, so this should parse correctly.
 pw type 'payload.kind == "order"' > /dev/null
 pw press Escape > /dev/null
 sleep 2
@@ -246,48 +216,31 @@ step "7. Check code & branches"
 
 [ -n "$BAL_FILE" ] && echo "  Code:" && cat "$BAL_FILE"
 echo ""
-echo "  Add buttons:"
-buttons=$(list_add_buttons)
-echo "$buttons"
 
-# Parse buttons
-all_btns=$(echo "$buttons" | python3 -c "
-import json, sys
-try:
-  for b in json.load(sys.stdin): print(b)
-except: pass
-" 2>/dev/null || true)
+# Find add-node buttons from snapshot (now pseudoelements)
+snap=$(pw snapshot)
+echo "  Add buttons in snapshot:"
+echo "$snap" | grep 'button "empty-node-add-button\|button "link-add-button'
 
-# Find the empty-node buttons (these are the branch bodies)
-then_btn=$(echo "$all_btns" | grep 'empty-node' | head -1)
-else_btn=$(echo "$all_btns" | grep 'empty-node' | tail -1)
+then_btn=$(echo "$snap" | grep 'button "empty-node-add-button' | head -1 | grep -oE 'g:s[0-9]+e[0-9]+' | head -1 || true)
+else_btn=$(echo "$snap" | grep 'button "empty-node-add-button' | tail -1 | grep -oE 'g:s[0-9]+e[0-9]+' | head -1 || true)
 
-echo "  Then-branch button: $then_btn"
-echo "  Else-branch button: $else_btn"
+echo "  Then-branch ref: $then_btn"
+echo "  Else-branch ref: $else_btn"
 
 # ── 8. Add Return to then-branch (orders) ─────────────────────────────────────
 
 step "8a. Add Return to then-branch"
 
-if [ -z "$then_btn" ]; then
-  # If no empty-node buttons, use the first add-button
-  then_btn=$(echo "$all_btns" | head -1)
-fi
-
+[ -z "$then_btn" ] && fail "No add-button for then-branch"
 echo "  Using: $then_btn"
-click_add_node "$then_btn"
+pw click "$then_btn" > /dev/null
 sleep 1
 
-# Wait for palette to open
-for attempt in 1 2 3; do
-  snap=$(pw snapshot)
-  if echo "$snap" | grep -q 'Declare Variable\|Return'; then
-    break
-  fi
-  sleep 1
-done
-
-click_palette_item "Return"
+snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
+r=$(ref "$snap" 'button "Return"')
+[ -z "$r" ] && fail "Return palette item not found"
+pw click "$r" > /dev/null
 sleep 2
 
 snap=$(pw snapshot)
@@ -314,39 +267,23 @@ echo "✓ Return (orders) saved in then-branch"
 
 step "8b. Add Return to else-branch"
 
-# Refresh button list
-buttons=$(list_add_buttons)
-echo "  Current add-buttons: $buttons"
+# Refresh snapshot to find remaining empty-node button
+snap=$(pw snapshot)
+echo "  Current add buttons:"
+echo "$snap" | grep 'button "empty-node-add-button'
 
-all_btns=$(echo "$buttons" | python3 -c "
-import json, sys
-try:
-  for b in json.load(sys.stdin): print(b)
-except: pass
-" 2>/dev/null || true)
-
-# Find the remaining empty-node button (else branch)
-else_btn=$(echo "$all_btns" | grep 'empty-node' | head -1)
-if [ -z "$else_btn" ]; then
-  # No empty-node, try the last link button
-  else_btn=$(echo "$all_btns" | tail -1)
-fi
+else_btn=$(echo "$snap" | grep 'button "empty-node-add-button' | head -1 | grep -oE 'g:s[0-9]+e[0-9]+' | head -1 || true)
 
 echo "  Using: $else_btn"
 [ -z "$else_btn" ] && fail "No add-button for else-branch"
 
-click_add_node "$else_btn"
+pw click "$else_btn" > /dev/null
 sleep 1
 
-for attempt in 1 2 3; do
-  snap=$(pw snapshot)
-  if echo "$snap" | grep -q 'Declare Variable\|Return'; then
-    break
-  fi
-  sleep 1
-done
-
-click_palette_item "Return"
+snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
+r=$(ref "$snap" 'button "Return"')
+[ -z "$r" ] && fail "Return palette item not found"
+pw click "$r" > /dev/null
 sleep 2
 
 snap=$(pw snapshot)

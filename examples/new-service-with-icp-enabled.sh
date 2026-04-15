@@ -77,9 +77,9 @@ snap=$(pw click "$(ref "$snap" 'button "Create"')")
 snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 
-# Wait for method selector, then click GET
+# Wait for method selector, then click GET (pseudoelement button)
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "g:text=GET" > /dev/null
+pw click "$(ref "$snap" 'button "GET"')" > /dev/null
 
 # Wait for resource path field, then fill it
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)

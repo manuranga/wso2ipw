@@ -20,6 +20,71 @@ import os from 'os';
 import crypto from 'crypto';
 import { spawn, execSync } from 'child_process';
 
+// ─── Pseudoelement injection ────────────────────────────────────────────────
+// WSO2's extension renders many interactive elements without ARIA roles.
+// Before each snapshot we inject role + aria-label so they get refs.
+//
+// Three rules cover everything:
+//   1. Any leaf <div> with cursor:pointer — palette items, HTTP method labels,
+//      action links (Define Payload, Add Connection, Add Else Block, …)
+//   2. SVG add-node buttons ([data-testid*="add-button"]) — target parent <div>
+//      because the <svg> itself reports 0×0 layout
+//   3. Flow diagram nodes (.node inside the canvas) — cursor:move, not pointer
+//
+// Special case: <vscode-button data-testid="close-panel-btn"> already has an
+// implicit button role; we only override its aria-label.
+
+const INJECT_PSEUDOS_FN = () => {
+  // Strip previous cycle
+  for (const el of document.querySelectorAll('[data-pseudo]')) {
+    el.removeAttribute('role');
+    el.removeAttribute('aria-label');
+    el.removeAttribute('data-pseudo');
+  }
+  const dominated = (el) =>
+    el.getAttribute('role') || el.matches('button,a,[role]');
+  const tag = (el, label) => {
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', label);
+    el.setAttribute('data-pseudo', '1');
+  };
+  // 1. Specific selectors first (take priority over generic scan)
+  //    SVG add-node buttons → tag parent div (has layout)
+  for (const el of document.querySelectorAll('[data-testid*="add-button"]')) {
+    const div = el.parentElement;
+    if (div?.tagName === 'DIV' && !dominated(div))
+      tag(div, el.getAttribute('data-testid'));
+  }
+  //    Flow diagram nodes (cursor:move, not pointer)
+  for (const el of document.querySelectorAll(
+    '[data-testid="bi-diagram-canvas"] .node'
+  )) {
+    const text = el.textContent?.trim().split('\n')[0];
+    if (text && !dominated(el)) tag(el, text);
+  }
+  //    close-panel-btn — label override only
+  const cp = document.querySelector('[data-testid="close-panel-btn"]');
+  if (cp) {
+    cp.setAttribute('aria-label', 'Close Panel');
+    cp.setAttribute('data-pseudo', '1');
+  }
+  // 2. Generic: divs and spans with cursor:pointer (innermost first)
+  //    Skip elements whose child elements contain meaningful text (avoids
+  //    tagging wrapper divs that duplicate their children's labels).
+  const els = document.querySelectorAll('div, span');
+  for (let i = els.length - 1; i >= 0; i--) {
+    const el = els[i];
+    if (dominated(el) || el.querySelector('[data-pseudo]')) continue;
+    const text = el.textContent?.trim();
+    if (!text || text.length > 50) continue;
+    if ([...el.children].some(c => c.textContent?.trim())) continue;
+    if (getComputedStyle(el).cursor !== 'pointer') continue;
+    tag(el, text);
+  }
+};
+
+const injectPseudos = INJECT_PSEUDOS_FN;
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 const APP_PATHS = [
@@ -178,15 +243,19 @@ async function startDaemonProcess() {
 
   // ── Snapshot ──
 
+  async function injectPseudoElements(frame) {
+    try { await frame.evaluate(injectPseudos); } catch {}
+  }
+
   async function snapshotGuest() {
-    const frame = webviewFrame();
-    if (!frame)
-      return await (await ensureWebviewFrame()).locator('body').ariaSnapshot({ ref: true });
-    try {
-      return await frame.locator('body').ariaSnapshot({ ref: true });
-    } catch {
-      return await (await ensureWebviewFrame()).locator('body').ariaSnapshot({ ref: true });
+    let frame = webviewFrame();
+    if (!frame) frame = await ensureWebviewFrame();
+    else {
+      try { await frame.locator('body').waitFor({ timeout: 500 }); }
+      catch { frame = await ensureWebviewFrame(); }
     }
+    await injectPseudoElements(frame);
+    return await frame.locator('body').ariaSnapshot({ ref: true });
   }
 
   async function snapshotHost() {

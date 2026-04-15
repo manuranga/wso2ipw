@@ -21,31 +21,6 @@ ref() { echo "$1" | grep -F "$2" | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || t
 step() { echo ""; echo "═══ $1 ═══"; }
 fail() { echo "FAIL: $1" >&2; cleanup; exit 1; }
 
-# Click a React palette item by exact text match. Dispatches pointer+click events.
-click_palette_item() {
-  pw eval "g:
-    for (const e of document.querySelectorAll('.css-lbgul4')) {
-      if (e.textContent === '$1') {
-        var t = e.parentElement;
-        t.scrollIntoView();
-        t.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}));
-        t.dispatchEvent(new PointerEvent('pointerup', {bubbles:true}));
-        t.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-        break;
-      }
-    }
-  " > /dev/null 2>&1 || true
-}
-
-# Click the "+" add-node SVG button. Tries empty-node first, then link-node.
-click_add_node() {
-  pw eval "g:
-    var btn = document.querySelector('[data-testid=empty-node-add-button-1]') ||
-              document.querySelector('[data-testid=link-add-button-1]');
-    if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-  " > /dev/null 2>&1 || true
-}
-
 PROJ_ID="proxy$(date +%s)"
 MOCK_PID=""
 
@@ -128,7 +103,7 @@ snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "g:text=GET" > /dev/null
+pw click "$(ref "$snap" 'button "GET"')" > /dev/null
 
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
@@ -145,18 +120,14 @@ echo "✓ GET /proxy resource created"
 
 step "4. Add HTTP Connection (httpClient → localhost:3333)"
 
-pw wait-for-text "Error Handler" --timeout=15000 > /dev/null
-
-# Open node palette via the "+" SVG button
-click_add_node
+# Wait for flow editor, then open node palette via "+" SVG button
+snap=$(pw wait-for-text "Error Handler" --timeout=15000)
+pw click "$(ref "$snap" 'button "empty-node-add-button-1"')" > /dev/null
 snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
 
-# Open "Add Connection" panel (first match = side panel)
+# Open "Add Connection" panel (has nested icon child — use text selector)
 pw click "g:text=Add Connection >> nth=0" > /dev/null
-pw wait-for-text "Add Connection" --timeout=10000 > /dev/null
-
-# Search for HTTP connector (use the connection panel search box — last "Text field")
-snap=$(pw snapshot)
+snap=$(pw wait-for-text "Add Connection" --timeout=10000)
 conn_search=$(echo "$snap" | grep -F 'textbox "Text field"' | tail -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 [ -z "$conn_search" ] && fail "Connection search box not found"
 pw click "$conn_search" > /dev/null
@@ -170,8 +141,7 @@ r=$(echo "$snap" | grep -B1 "ballerina / http" | head -1 | grep -oE '[gh]:s[0-9]
 pw click "$r" > /dev/null
 
 # Wait for connector pull + URL field
-pw wait-for-text "Url" --timeout=30000 > /dev/null
-snap=$(pw snapshot)
+snap=$(pw wait-for-text "Url" --timeout=30000)
 
 # Fill URL field (type without quotes)
 url_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
@@ -193,19 +163,28 @@ echo "✓ HTTP Connection saved"
 step "5. Add Return node with httpClient→get call"
 
 # The palette is still open with "Select node" active after connection save.
-# Scroll to and click the Return palette item (needs pointer events for React).
+# Click the Return palette item (now a pseudoelement).
 sleep 1
-click_palette_item "Return"
-sleep 2
+snap=$(pw snapshot)
+r=$(ref "$snap" 'button "Return"')
+if [ -n "$r" ]; then
+  pw click "$r" > /dev/null
+  sleep 2
+fi
 
 # Verify the Return form opened
 snap=$(pw snapshot)
 if ! echo "$snap" | grep -q "Return value"; then
-  # First attempt failed — re-click the "+" button to reset insertion point
-  click_add_node
-  sleep 1
-  click_palette_item "Return"
-  sleep 2
+  # First attempt failed — close panel and re-click "+" to reset insertion point
+  r=$(ref "$snap" 'button "Close Panel"') || true
+  [ -n "$r" ] && pw click "$r" > /dev/null && sleep 1
+  snap=$(pw snapshot)
+  r=$(ref "$snap" 'button "empty-node-add-button-1"') || true
+  [ -z "$r" ] && r=$(ref "$snap" 'button "link-add-button-1"') || true
+  [ -n "$r" ] && pw click "$r" > /dev/null && sleep 1
+  snap=$(pw snapshot)
+  r=$(ref "$snap" 'button "Return"')
+  [ -n "$r" ] && pw click "$r" > /dev/null && sleep 2
 fi
 snap=$(pw wait-for-text "Return value" --timeout=10000)
 

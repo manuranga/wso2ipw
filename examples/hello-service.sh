@@ -70,7 +70,7 @@ snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 
 snap=$(pw wait-for-text "GET" --timeout=10000)
-pw click "g:text=GET" > /dev/null
+pw click "$(ref "$snap" 'button "GET"')" > /dev/null
 
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
@@ -88,14 +88,11 @@ echo "✓ GET /greeting resource created"
 step "4. Add Return node"
 
 # Wait for flow editor to render the SVG canvas
-pw wait-for-text "Error Handler" --timeout=15000 > /dev/null
-
-# The "+" add-node button is an SVG element outside the aria tree
-pw eval 'g:document.querySelector("[data-testid=empty-node-add-button-1]")?.dispatchEvent(new MouseEvent("click", {bubbles:true}))' > /dev/null
+snap=$(pw wait-for-text "Error Handler" --timeout=15000)
+pw click "$(ref "$snap" 'button "empty-node-add-button-1"')" > /dev/null
 snap=$(pw wait-for-text "Declare Variable" --timeout=10000)
 
-pw eval 'g:document.querySelectorAll(".css-lbgul4").forEach(e => { if (e.textContent==="Return") e.scrollIntoView() })' > /dev/null
-pw click "g:text=Return" > /dev/null
+pw click "$(ref "$snap" 'button "Return"')" > /dev/null
 snap=$(pw wait-for-text "Expression" --timeout=10000)
 
 r=$(ref "$snap" 'textbox')

@@ -1,6 +1,6 @@
 {
   "name": "wso2ipw",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI to automate WSO2 Integrator (Electron app) via Playwright",
   "type": "module",
   "bin": {

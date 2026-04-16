@@ -323,12 +323,31 @@ async function startDaemonProcess() {
         if (!raw) throw new Error(`Usage: ${cmd} <g:|h:><target> [--force]`);
         const { frame: prefix, target } = parsePrefix(raw);
         const frame = frameFor(prefix);
-        const force = args.includes('--no-force') ? false
-          : (args.includes('--force') || prefix === 'g');
+        const forceExplicit = args.includes('--force') ? true
+          : args.includes('--no-force') ? false : null;
         const locator = resolveLocator(frame, target);
-        const opts = { timeout: 5000, force };
-        if (cmd === 'dblclick') await locator.dblclick(opts);
-        else await locator.click(opts);
+
+        // <vscode-button> has a shadow DOM <button> that must receive the click.
+        // Playwright force-click bypasses shadow DOM propagation; non-force times
+        // out when overlays cover the button. So we click the shadow button via JS.
+        const isVscodeBtn = await locator.evaluate(
+          el => el.tagName === 'VSCODE-BUTTON'
+            || el.closest?.('vscode-button') !== null
+        ).catch(() => false);
+
+        if (isVscodeBtn && cmd === 'click' && forceExplicit === null) {
+          await locator.evaluate(el => {
+            const host = el.tagName === 'VSCODE-BUTTON' ? el : el.closest('vscode-button');
+            if (host?.disabled) throw new Error('Button is disabled');
+            const btn = host?.shadowRoot?.querySelector('button');
+            (btn || host).click();
+          });
+        } else {
+          const force = forceExplicit ?? (prefix === 'g');
+          const opts = { timeout: 5000, force };
+          if (cmd === 'dblclick') await locator.dblclick(opts);
+          else await locator.click(opts);
+        }
         return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${raw}\n` + await settledSnapshot();
       }
 
@@ -339,16 +358,55 @@ async function startDaemonProcess() {
         const frame = frameFor(prefix);
         const text = args.filter(a => a !== raw && !a.startsWith('-')).join(' ');
         const locator = resolveLocator(frame, target);
-        // Shadow DOM inputs (vscode-text-field) need focus+keyboard instead of fill()
-        const hasShadowInput = await locator.evaluate(el =>
-          !!el.shadowRoot?.querySelector('input, textarea')
-        ).catch(() => false);
-        if (hasShadowInput) {
+        // Three input types need different fill strategies:
+        //   1. vscode-text-field (shadow DOM <input>) — type into shadow input,
+        //      fire composed input/change events, blur for validation
+        //   2. CodeMirror (contentEditable .cm-content) — Playwright fill() sets
+        //      DOM text but bypasses CM6's input system; must use keyboard
+        //   3. Normal inputs — Playwright fill() works directly
+        const inputType = await locator.evaluate(el => {
+          if (el.shadowRoot?.querySelector('input, textarea')) return 'shadow';
+          // Playwright aria-refs pierce shadow DOM: the locator may resolve to
+          // the <input> inside a shadow root rather than the host element.
+          if (el.getRootNode() instanceof ShadowRoot) return 'shadow';
+          if (el.closest?.('.cm-editor') || el.classList?.contains('cm-content')) return 'codemirror';
+          return 'default';
+        }).catch(() => 'default');
+
+        if (inputType === 'shadow') {
+          // Locate the native <input> — locator may be the host or the input itself.
           await locator.evaluate(el => {
-            const input = el.shadowRoot.querySelector('input, textarea');
+            const input = el.shadowRoot?.querySelector('input, textarea') || el;
             input.focus(); input.select();
           });
           await window.keyboard.type(text);
+          // Blur the host element to trigger framework validation.
+          // The locator is stale after typing (React re-render), so target
+          // the host via the active element's shadow root chain.
+          await frameFor(prefix).evaluate(() => {
+            const active = document.activeElement;
+            // active may be the host (vscode-text-field) with shadow containing input
+            const input = active?.shadowRoot?.querySelector('input, textarea')
+              || (active?.getRootNode() instanceof ShadowRoot ? active : null);
+            const host = active?.shadowRoot ? active : active?.getRootNode()?.host;
+            if (input) {
+              input.dispatchEvent(new InputEvent('input', {
+                bubbles: true, composed: true,
+                inputType: 'insertText', data: input.value,
+              }));
+              input.blur();
+            }
+            if (host) host.blur();
+          }).catch(() => {});
+        } else if (inputType === 'codemirror') {
+          // CM6 autocomplete fires per-keystroke and swallows typed chars.
+          // Paste via system clipboard bypasses autocomplete entirely.
+          await locator.click({ force: true, timeout: 2000 });
+          await window.keyboard.press('Meta+a');
+          await frameFor(prefix).evaluate(
+            t => navigator.clipboard.writeText(t), text);
+          await window.keyboard.press('Meta+v');
+          await window.keyboard.press('Escape');
         } else {
           await locator.fill(text, { timeout: 5000 });
         }
@@ -578,7 +636,7 @@ Targeting (prefix required):
   h:"getByRole('button', {name:'X'})" Playwright locator in host
 
 Flags:
-  --force / --no-force  Override pointer-event checks on click
+  --force / --no-force  Override pointer-event checks (auto for g: except vscode-button)
   --timeout=N           Timeout in ms (for wait-for-text)
   --hidden              Wait for text to disappear from both frames
   --user-data-dir=<p>   Persistent profile directory

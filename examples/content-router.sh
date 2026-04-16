@@ -57,10 +57,8 @@ r=$(ref "$snap" 'Skip for now')
 
 snap=$(pw wait-for-text "Create" --timeout=15000)
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
-pw fill "$(ref "$snap" 'textbox "Integration Name')" ContentRouter > /dev/null
-snap=$(pw snapshot)
-pw fill "$(ref "$snap" 'textbox "Project Name')" "Router Project" > /dev/null
-snap=$(pw snapshot)
+snap=$(pw fill "$(ref "$snap" 'textbox "Integration Name')" ContentRouter)
+snap=$(pw fill "$(ref "$snap" 'textbox "Project Name')" "Router Project")
 pw fill "$(ref "$snap" 'textbox "Project ID"')" "$PROJ_ID" > /dev/null
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Create Integration"')")
@@ -85,7 +83,6 @@ snap=$(pw wait-for-text "GET" --timeout=10000)
 pw click "$(ref "$snap" 'button "POST"')" > /dev/null
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 pw fill "$(ref "$snap" 'textbox "Resource Path')" route > /dev/null
-pw press Tab > /dev/null
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Save"')")
 echo "✓ POST /route created"
@@ -130,10 +127,11 @@ snap=$(pw snapshot)
 r=$(echo "$snap" | grep -B1 "ballerina / http" | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 pw click "$r" > /dev/null
 snap=$(pw wait-for-text "Url" --timeout=30000)
+
+# Fill URL (CodeMirror — smart fill handles click+type+escape)
 url_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
-pw click "$url_field" > /dev/null
-pw type "http://localhost:3333" > /dev/null
-pw press Escape > /dev/null
+pw fill "$url_field" "http://localhost:3333" > /dev/null
+
 snap=$(pw snapshot)
 r=$(ref "$snap" 'Save Connection')
 [ -z "$r" ] && fail "Save Connection not found"
@@ -145,7 +143,7 @@ echo "✓ httpClient saved"
 
 step "6. Add If node"
 
-# Palette is stuck in "select node" mode. Click If palette item (now a pseudoelement).
+# Palette is stuck in "select node" mode. Click If palette item.
 sleep 2
 snap=$(pw snapshot)
 for attempt in 1 2 3; do
@@ -163,32 +161,31 @@ done
 echo "$snap" | grep -q 'Condition' || fail "If form not opened"
 echo "  If form opened"
 
-# First, click "Add Else Block" to create the else branch
+# Add Else Block first
 snap=$(pw snapshot)
 pw click "$(ref "$snap" 'button "Add Else Block"')" > /dev/null
 sleep 1
 echo "  Added Else Block"
 
-# Now type the condition. Use "kind" instead of "type" (reserved keyword in Ballerina)
+# Fill the condition (CodeMirror — smart fill handles select-all + type)
+snap=$(pw snapshot)
 cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 [ -z "$cond_field" ] && fail "Condition field not found"
+pw fill "$cond_field" 'payload.kind == "order"' > /dev/null
 
-# Re-snapshot after adding else block (refs may change)
-snap=$(pw snapshot)
-cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
+# Wait for LSP to validate the condition and enable Save
+for attempt in $(seq 1 10); do
+  sleep 1
+  snap=$(pw snapshot)
+  r=$(ref "$snap" 'button "Save"')
+  disabled=$(echo "$snap" | grep 'button "Save".*disabled' || true)
+  [ -n "$r" ] && [ -z "$disabled" ] && break
+  [ "$attempt" -eq 10 ] && echo "  Save still disabled after 10s"
+done
 
-pw click "$cond_field" > /dev/null
-sleep 1
-pw type 'payload.kind == "order"' > /dev/null
-pw press Escape > /dev/null
-sleep 2
-
-snap=$(pw snapshot)
 echo "  Condition state:"
 echo "$snap" | grep -i 'error\|invalid\|save\|textbox\|else\|condition' | head -10
 
-r=$(ref "$snap" 'button "Save"')
-disabled=$(echo "$snap" | grep 'button "Save".*disabled' || true)
 if [ -n "$r" ] && [ -z "$disabled" ]; then
   pw click "$r" > /dev/null
   sleep 2
@@ -197,12 +194,8 @@ else
   echo "  Condition errors — falling back to 'true'"
   snap=$(pw snapshot)
   cond_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
-  pw click "$cond_field" > /dev/null
-  pw press Meta+a > /dev/null
-  pw press Backspace > /dev/null
-  pw type 'true' > /dev/null
-  pw press Escape > /dev/null
-  sleep 2
+  pw fill "$cond_field" 'true' > /dev/null
+  sleep 3
   snap=$(pw snapshot)
   r=$(ref "$snap" 'button "Save"')
   disabled=$(echo "$snap" | grep 'button "Save".*disabled' || true)
@@ -217,7 +210,7 @@ step "7. Check code & branches"
 [ -n "$BAL_FILE" ] && echo "  Code:" && cat "$BAL_FILE"
 echo ""
 
-# Find add-node buttons from snapshot (now pseudoelements)
+# Find add-node buttons from snapshot
 snap=$(pw snapshot)
 echo "  Add buttons in snapshot:"
 echo "$snap" | grep 'button "empty-node-add-button\|button "link-add-button'
@@ -250,11 +243,7 @@ if [ -z "$r" ]; then
 fi
 [ -z "$r" ] && fail "Return expression field not found (then)"
 
-pw click "$r" > /dev/null
-pw press Meta+a > /dev/null
-pw press Backspace > /dev/null
-pw type 'check httpClient->get("/orders", targetType = json)' > /dev/null
-pw press Escape > /dev/null
+pw fill "$r" 'check httpClient->get("/orders", targetType = json)' > /dev/null
 sleep 1
 
 snap=$(pw snapshot)
@@ -293,11 +282,7 @@ if [ -z "$r" ]; then
 fi
 [ -z "$r" ] && fail "Return expression field not found (else)"
 
-pw click "$r" > /dev/null
-pw press Meta+a > /dev/null
-pw press Backspace > /dev/null
-pw type 'check httpClient->get("/payments", targetType = json)' > /dev/null
-pw press Escape > /dev/null
+pw fill "$r" 'check httpClient->get("/payments", targetType = json)' > /dev/null
 sleep 1
 
 snap=$(pw snapshot)

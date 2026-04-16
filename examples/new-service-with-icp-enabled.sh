@@ -48,10 +48,8 @@ step "2. Create integration: hello-icp (project: $PROJ_ID)"
 
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
 
-pw fill "$(ref "$snap" 'textbox "Integration Name')" hello-icp > /dev/null
-snap=$(pw snapshot)
-pw fill "$(ref "$snap" 'textbox "Project Name')" "ICP Test Project" > /dev/null
-snap=$(pw snapshot)
+snap=$(pw fill "$(ref "$snap" 'textbox "Integration Name')" hello-icp)
+snap=$(pw fill "$(ref "$snap" 'textbox "Project Name')" "ICP Test Project")
 pw fill "$(ref "$snap" 'textbox "Project ID"')" "$PROJ_ID" > /dev/null
 
 snap=$(pw snapshot)
@@ -77,16 +75,15 @@ snap=$(pw click "$(ref "$snap" 'button "Create"')")
 snap=$(pw wait-for-text "Add Resource" --timeout=15000)
 pw click "$(ref "$snap" 'Add Resource')" > /dev/null
 
-# Wait for method selector, then click GET (pseudoelement button)
+# Wait for method selector, then click GET
 snap=$(pw wait-for-text "GET" --timeout=10000)
 pw click "$(ref "$snap" 'button "GET"')" > /dev/null
 
-# Wait for resource path field, then fill it
+# Fill resource path (smart fill auto-blurs to enable Save)
 snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
 [ -z "$r" ] && fail "Resource Path field not found"
 pw fill "$r" greeting > /dev/null
-pw press Tab > /dev/null  # blur triggers onBlur validation, enabling Save
 
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Save"')")

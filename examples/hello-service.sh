@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # End-to-end test: Create an HTTP hello world service and verify it responds.
-# Uses unified g:/h: ref prefixes (no --host flag).
 #
 # Flow:
 #   1. Open WSO2 Integrator
@@ -43,10 +42,8 @@ step "2. Create integration (project: $PROJ_ID)"
 
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
 
-pw fill "$(ref "$snap" 'textbox "Integration Name')" HelloWorld > /dev/null
-snap=$(pw snapshot)
-pw fill "$(ref "$snap" 'textbox "Project Name')" "Hello Project" > /dev/null
-snap=$(pw snapshot)
+snap=$(pw fill "$(ref "$snap" 'textbox "Integration Name')" HelloWorld)
+snap=$(pw fill "$(ref "$snap" 'textbox "Project Name')" "Hello Project")
 pw fill "$(ref "$snap" 'textbox "Project ID"')" "$PROJ_ID" > /dev/null
 
 snap=$(pw snapshot)
@@ -76,7 +73,6 @@ snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
 [ -z "$r" ] && fail "Resource Path field not found"
 pw fill "$r" greeting > /dev/null
-pw press Tab > /dev/null
 
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Save"')")
@@ -97,8 +93,7 @@ snap=$(pw wait-for-text "Expression" --timeout=10000)
 
 r=$(ref "$snap" 'textbox')
 [ -z "$r" ] && fail "Expression field not found"
-pw click "$r" > /dev/null
-pw type '"Hello, World!"'
+pw fill "$r" '"Hello, World!"' > /dev/null
 
 snap=$(pw snapshot)
 r=$(ref "$snap" 'button "Save"')

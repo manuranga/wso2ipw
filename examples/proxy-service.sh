@@ -10,7 +10,6 @@
 #   5. Add a Return node that calls httpClient->get("/proxy")
 #   6. Run the integration, verify GET localhost:9090/proxy returns the mock body
 #
-#
 set -euo pipefail
 
 pw() { wso2ipw "$@"; }
@@ -70,10 +69,8 @@ fi
 snap=$(pw wait-for-text "Create" --timeout=15000)
 snap=$(pw click "$(ref "$snap" 'button "Create"')")
 
-pw fill "$(ref "$snap" 'textbox "Integration Name')" ProxyDemo > /dev/null
-snap=$(pw snapshot)
-pw fill "$(ref "$snap" 'textbox "Project Name')" "Proxy Project" > /dev/null
-snap=$(pw snapshot)
+snap=$(pw fill "$(ref "$snap" 'textbox "Integration Name')" ProxyDemo)
+snap=$(pw fill "$(ref "$snap" 'textbox "Project Name')" "Proxy Project")
 pw fill "$(ref "$snap" 'textbox "Project ID"')" "$PROJ_ID" > /dev/null
 
 snap=$(pw snapshot)
@@ -109,7 +106,6 @@ snap=$(pw wait-for-text "Resource Path" --timeout=10000)
 r=$(ref "$snap" 'textbox "Resource Path')
 [ -z "$r" ] && fail "Resource Path field not found"
 pw fill "$r" proxy > /dev/null
-pw press Tab > /dev/null
 
 snap=$(pw snapshot)
 snap=$(pw click "$(ref "$snap" 'button "Save"')")
@@ -143,12 +139,10 @@ pw click "$r" > /dev/null
 # Wait for connector pull + URL field
 snap=$(pw wait-for-text "Url" --timeout=30000)
 
-# Fill URL field (type without quotes)
+# Fill URL field (CodeMirror — smart fill handles click+type+escape)
 url_field=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 [ -z "$url_field" ] && fail "URL textbox not found"
-pw click "$url_field" > /dev/null
-pw type "http://localhost:3333" > /dev/null
-pw press Escape > /dev/null
+pw fill "$url_field" "http://localhost:3333" > /dev/null
 
 # Save connection
 snap=$(pw snapshot)
@@ -188,29 +182,34 @@ if ! echo "$snap" | grep -q "Return value"; then
 fi
 snap=$(pw wait-for-text "Return value" --timeout=10000)
 
-# Type the full proxy call as the Return expression
+# Fill the expression (CodeMirror — smart fill handles select-all + type)
 r=$(echo "$snap" | grep 'textbox \[' | head -1 | grep -oE '[gh]:s[0-9]+e[0-9]+' | head -1 || true)
 [ -z "$r" ] && fail "Expression textbox not found"
-pw click "$r" > /dev/null
-pw press Meta+a > /dev/null
-pw press Backspace > /dev/null
-pw type 'check httpClient->get("/proxy", targetType = json)' > /dev/null
-pw press Escape > /dev/null
-sleep 2
+pw fill "$r" 'check httpClient->get("/proxy", targetType = json)' > /dev/null
 
-snap=$(pw snapshot)
-r=$(ref "$snap" 'button "Save"')
+# Wait for LSP to validate and enable Save
+for i in $(seq 1 10); do
+  snap=$(pw snapshot)
+  r=$(ref "$snap" 'button "Save"')
+  disabled=$(echo "$snap" | grep 'button "Save".*disabled' || true)
+  [ -n "$r" ] && [ -z "$disabled" ] && break
+  sleep 1
+done
 [ -z "$r" ] && fail "Save button not found (expression may have a validation error)"
 pw click "$r" > /dev/null
-sleep 2
+sleep 3
 
 snap=$(pw snapshot)
 echo "$snap" | grep -q "Return" || fail "Return node not in flow"
 echo "✓ Return node saved"
 
-# Verify generated code
+# Verify generated code (wait for code gen to finish)
 BAL_DIR="$HOME/wso2integrator/projects/$PROJ_ID"
 BAL_FILE=$(find "$BAL_DIR" -name main.bal 2>/dev/null | head -1)
+for i in $(seq 1 5); do
+  grep -q 'httpClient->get' "$BAL_FILE" 2>/dev/null && break
+  sleep 1
+done
 echo "  Generated code:"
 cat "$BAL_FILE"
 grep -q 'httpClient->get' "$BAL_FILE" || fail "httpClient->get not found in generated code"

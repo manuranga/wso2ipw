@@ -75,6 +75,7 @@ const INJECT_PSEUDOS_FN = () => {
   for (let i = els.length - 1; i >= 0; i--) {
     const el = els[i];
     if (dominated(el) || el.querySelector('[data-pseudo]')) continue;
+    if (el.parentElement?.closest('button,a,[role]:not([role="document"]):not([role="main"]):not([role="navigation"]):not([role="region"]):not([role="complementary"]):not([role="contentinfo"]):not([role="banner"]):not(body)')) continue;
     const text = el.textContent?.trim();
     if (!text || text.length > 50) continue;
     if ([...el.children].some(c => c.textContent?.trim())) continue;
@@ -266,13 +267,27 @@ async function startDaemonProcess() {
     return snap.replace(/ref=s/g, `ref=${prefix}:s`);
   }
 
+  // Hit-test the iframe center in the host frame to detect modal overlays.
+  async function isGuestOccluded() {
+    return mainFrame().evaluate(() => {
+      const iframe = document.querySelector('iframe');
+      if (!iframe) return true;
+      const r = iframe.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return true;
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return hit !== iframe && !iframe.contains(hit);
+    }).catch(() => true);
+  }
+
   async function unifiedSnapshot() {
-    const [guest, host] = await Promise.all([
+    const [guest, host, occluded] = await Promise.all([
       snapshotGuest().catch(() => null),
       snapshotHost(),
+      isGuestOccluded(),
     ]);
     const sections = [];
-    if (guest !== null) sections.push(`- guest:\n${indent(prefixRefs(guest, 'g'))}`);
+    if (guest !== null && !occluded) sections.push(`- guest:\n${indent(prefixRefs(guest, 'g'))}`);
+    else if (guest !== null) sections.push('- guest: [occluded by host overlay]');
     sections.push(`- host:\n${indent(prefixRefs(host, 'h'))}`);
     return sections.join('\n');
   }
@@ -285,6 +300,20 @@ async function startDaemonProcess() {
   async function settledSnapshot() {
     await window.waitForTimeout(500);
     return await unifiedSnapshot();
+  }
+
+  // CM fields need longer settle for LSP validation (1-3s).
+  async function cmSettledSnapshot() {
+    await window.waitForTimeout(2000);
+    return await unifiedSnapshot();
+  }
+
+  // Check for codicon-warning error text near any CM editor in the frame.
+  async function checkCmErrors(frame) {
+    return frame.evaluate(() => {
+      const icon = document.querySelector('.codicon-warning');
+      return icon?.parentElement?.textContent?.trim() || '';
+    }).catch(() => '');
   }
 
   // ── Locator resolution ──
@@ -399,18 +428,30 @@ async function startDaemonProcess() {
             if (host) host.blur();
           }).catch(() => {});
         } else if (inputType === 'codemirror') {
-          // CM6 autocomplete fires per-keystroke and swallows typed chars.
-          // Paste via system clipboard bypasses autocomplete entirely.
-          await locator.click({ force: true, timeout: 2000 });
-          await window.keyboard.press('Meta+a');
-          await frameFor(prefix).evaluate(
-            t => navigator.clipboard.writeText(t), text);
-          await window.keyboard.press('Meta+v');
-          await window.keyboard.press('Escape');
+          // CM6 ignores Playwright fill() and insertText — they set DOM but not
+          // CM's internal state. keyboard.type() triggers autocomplete that
+          // swallows chars. keyboard.press() misroutes after frame operations.
+          // Solution: use CM6's view.dispatch() to replace the document directly.
+          await locator.evaluate((el, text) => {
+            const content = el.closest?.('.cm-editor')?.querySelector('.cm-content') ||
+              (el.classList?.contains('cm-content') ? el : null);
+            const view = content?.cmView?.view;
+            if (!view) throw new Error('CM view not found');
+            view.focus();
+            view.dispatch({
+              changes: { from: 0, to: view.state.doc.length, insert: text }
+            });
+          }, text);
         } else {
           await locator.fill(text, { timeout: 5000 });
         }
-        return `Filled: ${raw}\n` + await settledSnapshot();
+
+        // For CM fields, wait longer before snapshot — LSP validation takes 1-3s.
+        const snap = inputType === 'codemirror'
+          ? await cmSettledSnapshot()
+          : await settledSnapshot();
+        const cmErrors = inputType === 'codemirror' ? await checkCmErrors(frame) : '';
+        return `Filled: ${raw}` + (cmErrors ? `\n⚠ ${cmErrors}` : '') + '\n' + snap;
       }
 
       case 'type': {

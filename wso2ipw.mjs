@@ -129,21 +129,22 @@ function stateDir() {
 }
 
 function statePath(name) { return path.join(stateDir(), name); }
-// On Windows, Node's net server can't listen on a plain file path — it needs
-// a named-pipe URI. Use one derived from the workspace hash so each cwd still
-// gets its own daemon endpoint.
-const SOCKET = () => {
-  if (IS_WIN) {
-    const hash = crypto.createHash('sha1').update(stateDir()).digest('hex').substring(0, 16);
-    return `\\\\.\\pipe\\wso2ipw-${hash}`;
-  }
-  return statePath('daemon.sock');
-};
+// Windows named pipes aren't filesystem paths; derive one from the workspace hash.
+const SOCKET = () => IS_WIN
+  ? `\\\\.\\pipe\\wso2ipw-${path.basename(stateDir())}`
+  : statePath('daemon.sock');
 const PID_FILE = () => statePath('daemon.pid');
 const ERR_LOG  = () => statePath('daemon.err');
 const DAEMON_LOG = () => statePath('daemon.log');
 // Written by daemon so clients can discover which cwd this dir belongs to.
 const SESSION_FILE = () => statePath('session.json');
+
+function killApp() {
+  try {
+    if (IS_WIN) execSync('taskkill /F /IM "WSO2 Integrator.exe"', { stdio: 'ignore' });
+    else execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' });
+  } catch {}
+}
 
 function findApp() {
   if (process.env.WSO2_INTEGRATOR_PATH) {
@@ -610,9 +611,7 @@ async function startDaemonProcess() {
 function sendCommand(cmd, args) {
   return new Promise((resolve, reject) => {
     const sock = SOCKET();
-    // Named pipes on Windows aren't filesystem entries; fall back to the PID file.
-    const available = IS_WIN ? fs.existsSync(PID_FILE()) : fs.existsSync(sock);
-    if (!available)
+    if (!IS_WIN && !fs.existsSync(sock))
       return reject(new Error('App not running. Run: wso2ipw open'));
     const socket = net.createConnection(sock, () => {
       writeMessage(socket, { cmd, args, cwd: process.cwd() });
@@ -644,10 +643,7 @@ function isDaemonRunning() {
 
 function spawnDaemon(userDataDir) {
   return new Promise((resolve, reject) => {
-    try {
-      if (IS_WIN) execSync('taskkill /F /IM "WSO2 Integrator.exe"', { stdio: 'ignore' });
-      else execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' });
-    } catch {}
+    killApp();
 
     const dir = stateDir();
     fs.mkdirSync(dir, { recursive: true });
@@ -732,10 +728,7 @@ Environment:
       console.log(`Already running (PID: ${pid}). Log: ${DAEMON_LOG()}`);
     } catch {
       try { process.kill(pid, 'SIGKILL'); } catch {}
-      try {
-        if (IS_WIN) execSync('taskkill /F /IM "WSO2 Integrator.exe"', { stdio: 'ignore' });
-        else execSync('pkill -f "WSO2.*Electron"', { stdio: 'ignore' });
-      } catch {}
+      killApp();
       try { fs.unlinkSync(SOCKET()); } catch {}
       try { fs.unlinkSync(PID_FILE()); } catch {}
       await new Promise(r => setTimeout(r, 2000));

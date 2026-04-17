@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-wso2ipw click g:"getByText('HelloWorld')"
+wso2ipw click g:"getByText(/^HelloWorld/)"
 wso2ipw wait-for-text "Your integration is empty"
 
 wso2ipw click g:"getByRole('button', {name: /Add Artifact/})"

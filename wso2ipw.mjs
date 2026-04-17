@@ -471,14 +471,36 @@ async function startDaemonProcess() {
   const writeClip = (t) => app.evaluate(({ clipboard }, t) => clipboard.writeText(t), t);
   const termMod = IS_WIN ? 'Control' : 'Meta';
 
-  async function readTerminal() {
-    const hasTerminal = await mainFrame().evaluate(
-      () => !!document.querySelector('.terminal.xterm')
-    );
-    if (!hasTerminal) throw new Error('No terminal found');
+  async function readTerminal(name) {
+    const termSel = '.terminal-wrapper > div > .terminal.xterm';
+    const terminals = await mainFrame().locator(termSel).all();
+    if (terminals.length === 0) throw new Error('No terminal found');
+    let target;
+    if (terminals.length === 1) {
+      target = terminals[0];
+    } else {
+      if (!name) throw new Error(
+        `Multiple terminals found (${terminals.length}). Specify terminal name, e.g.: wait-for-terminal <text> --terminal=<name>`);
+      // Find tab whose text contains the name, click it to focus that terminal
+      const tabList = mainFrame().getByRole('list', { name: 'Terminal tabs' }).getByRole('listitem');
+      const tabs = await tabList.all();
+      let found = false;
+      for (const tab of tabs) {
+        const label = await tab.innerText();
+        if (label.toLowerCase().includes(name.toLowerCase())) {
+          await tab.click({ timeout: ACTION_TIMEOUT, force: true });
+          await window.waitForTimeout(200);
+          found = true;
+          break;
+        }
+      }
+      if (!found) throw new Error(`Terminal "${name}" not found in tabs`);
+      // After focusing, the active terminal is the visible one
+      target = mainFrame().locator(`${termSel}:visible`).first();
+    }
     const saved = await readClip();
     try {
-      await mainFrame().locator('.terminal.xterm').click({ timeout: ACTION_TIMEOUT, force: true });
+      await target.click({ timeout: ACTION_TIMEOUT, force: true });
       await window.keyboard.press(`${termMod}+a`);
       await window.waitForTimeout(100);
       await window.keyboard.press(`${termMod}+c`);
@@ -702,16 +724,18 @@ async function startDaemonProcess() {
       }
 
       case 'terminal': {
-        return await readTerminal();
+        const termName = parseFlag(args, 'terminal') ?? args.find(a => !a.startsWith('-'));
+        return await readTerminal(termName);
       }
 
       case 'wait-for-terminal': {
         const text = args.find(a => !a.startsWith('-'));
-        if (!text) throw new Error('Usage: wait-for-terminal <text> [--timeout=N]');
+        if (!text) throw new Error('Usage: wait-for-terminal <text> [--timeout=N] [--terminal=<name>]');
+        const termName = parseFlag(args, 'terminal');
         const timeout = parseInt(parseFlag(args, 'timeout') ?? String(TERM_TIMEOUT));
         const deadline = Date.now() + timeout;
         while (Date.now() < deadline) {
-          const content = await readTerminal();
+          const content = await readTerminal(termName);
           if (content.includes(text)) return content;
           await window.waitForTimeout(TERM_POLL_MS);
         }
@@ -876,8 +900,8 @@ Commands:
   screenshot [file]             Save screenshot
   wait [ms]                     Sleep (default ${SLOW_SETTLE_MS}ms)
   wait-for-text <text>          Wait for text in either frame (--hidden for disappear)
-  wait-for-terminal <text>      Wait for text in terminal buffer
-  terminal                      Read terminal buffer text (canvas-rendered, from memory)
+  wait-for-terminal <text>      Wait for text in terminal buffer [--terminal=<name>]
+  terminal [--terminal=<name>]  Read terminal buffer text (canvas-rendered, from memory)
   close                         Quit the app
 
 Targeting (prefix required):

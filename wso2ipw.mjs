@@ -91,10 +91,9 @@ const injectPseudos = INJECT_PSEUDOS_FN;
 const IS_WIN = process.platform === 'win32';
 
 const APP_PATHS = IS_WIN ? [
+  path.join(process.env.APPDATA || '', 'WSO2', 'Integrator', 'WSO2 Integrator.exe'),
   path.join(process.env.LOCALAPPDATA || '', 'Programs', 'WSO2 Integrator', 'WSO2 Integrator.exe'),
-  path.join(process.env.LOCALAPPDATA || '', 'Programs', 'wso2-integrator', 'WSO2 Integrator.exe'),
   path.join(process.env.ProgramFiles || '', 'WSO2 Integrator', 'WSO2 Integrator.exe'),
-  path.join(os.homedir(), 'Integrator', 'WSO2 Integrator.exe'),
 ] : [
   path.join(os.homedir(), 'Applications/WSO2 Integrator.app/Contents/MacOS/Electron'),
   '/Applications/WSO2 Integrator.app/Contents/MacOS/Electron',

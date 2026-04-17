@@ -52,8 +52,22 @@ const INJECT_PSEUDOS_FN = () => {
   //    SVG add-node buttons → tag parent div (has layout)
   for (const el of document.querySelectorAll('[data-testid*="add-button"]')) {
     const div = el.parentElement;
-    if (div?.tagName === 'DIV' && !dominated(div))
-      tag(div, el.getAttribute('data-testid'));
+    if (div?.tagName === 'DIV' && !dominated(div)) {
+      // Rename to avoid collision with Copilot chip that shares the numeric id
+      const testId = el.getAttribute('data-testid');
+      const label = testId.replace('link-add-button', 'add-node-between')
+                          .replace('empty-node-add-button', 'add-node-empty');
+      tag(div, label);
+      // The div is display:none until hover. Force it visible and sized.
+      if (testId.startsWith('link-add-button')) {
+        div.style.display = 'flex';
+        div.style.alignItems = 'center';
+        div.style.justifyContent = 'center';
+        div.style.minWidth = '24px';
+        div.style.minHeight = '24px';
+        div.style.overflow = 'visible';
+      }
+    }
   }
   //    Flow diagram nodes (cursor:move, not pointer)
   for (const el of document.querySelectorAll(
@@ -197,9 +211,10 @@ async function startDaemonProcess() {
   log(`Launching: ${appPath}`);
   log(`User data: ${userDataDir}`);
 
+  const extraArgs = (process.env.WSO2IPW_ELECTRON_ARGS || '').split(/\s+/).filter(Boolean);
   const app = await electron.launch({
     executablePath: appPath,
-    args: [`--user-data-dir=${userDataDir}`],
+    args: [`--user-data-dir=${userDataDir}`, ...extraArgs],
   });
   app.on('close', () => log('Electron closed'));
   app.process().on('exit', code => log(`Electron exited: ${code}`));
@@ -418,29 +433,14 @@ async function startDaemonProcess() {
         }).catch(() => 'default');
 
         if (inputType === 'shadow') {
-          // Locate the native <input> — locator may be the host or the input itself.
+          // Playwright's locator already resolved to the shadow <input>,
+          // so fill() works directly.  Afterwards, blur the FAST host to
+          // trigger framework validation.
+          await locator.fill(text, { timeout: 5000 });
           await locator.evaluate(el => {
-            const input = el.shadowRoot?.querySelector('input, textarea') || el;
-            input.focus(); input.select();
-          });
-          await window.keyboard.type(text);
-          // Blur the host element to trigger framework validation.
-          // The locator is stale after typing (React re-render), so target
-          // the host via the active element's shadow root chain.
-          await frameFor(prefix).evaluate(() => {
-            const active = document.activeElement;
-            // active may be the host (vscode-text-field) with shadow containing input
-            const input = active?.shadowRoot?.querySelector('input, textarea')
-              || (active?.getRootNode() instanceof ShadowRoot ? active : null);
-            const host = active?.shadowRoot ? active : active?.getRootNode()?.host;
-            if (input) {
-              input.dispatchEvent(new InputEvent('input', {
-                bubbles: true, composed: true,
-                inputType: 'insertText', data: input.value,
-              }));
-              input.blur();
-            }
-            if (host) host.blur();
+            const host = el.getRootNode()?.host;
+            el.blur();
+            if (host) host.blur?.();
           }).catch(() => {});
         } else if (inputType === 'codemirror') {
           // CM6 ignores Playwright fill() and insertText — they set DOM but not
@@ -466,7 +466,8 @@ async function startDaemonProcess() {
           ? await cmSettledSnapshot()
           : await settledSnapshot();
         const cmErrors = inputType === 'codemirror' ? await checkCmErrors(frame) : '';
-        return `Filled: ${raw}` + (cmErrors ? `\n⚠ ${cmErrors}` : '') + '\n' + snap;
+        if (cmErrors) throw new Error(`Fill validation error: ${cmErrors}\n${snap}`);
+        return `Filled: ${raw}\n` + snap;
       }
 
       case 'type': {
@@ -543,7 +544,9 @@ async function startDaemonProcess() {
       }
 
       case 'close': {
-        await app.close();
+        // Don't await app.close() — Electron may show save dialogs or
+        // hang.  Kill the process tree after replying to the client.
+        app.close().catch(() => {});
         cleanup();
         return 'Closed.';
       }
@@ -564,7 +567,12 @@ async function startDaemonProcess() {
         log(`OK: ${cmd} (${result?.length ?? 0} chars)`);
         writeMessage(socket, { ok: true, result });
         socket.end();
-        if (cmd === 'close') process.exit(0);
+        if (cmd === 'close') {
+          // Wait for the response to flush before exiting.
+          socket.on('close', () => process.exit(0));
+          // Safety: exit anyway after 2s if socket lingers.
+          setTimeout(() => process.exit(0), 2000).unref();
+        }
       } catch (err) {
         log(`ERR: ${cmd}: ${err.message}`);
         writeMessage(socket, { ok: false, error: err.message });
@@ -609,10 +617,20 @@ function sendCommand(cmd, args) {
     const socket = net.createConnection(sock, () => {
       writeMessage(socket, { cmd, args, cwd: process.cwd() });
     });
+    // For 'close', the daemon may exit before flushing the reply.
+    // Treat a clean socket close as success.
+    const isClose = cmd === 'close';
     readMessage(socket).then(res => {
       socket.destroy();
       res.ok ? resolve(res.result) : reject(new Error(res.error));
-    }).catch(reject);
+    }).catch(err => {
+      if (isClose) resolve('Closed.');
+      else reject(err);
+    });
+    socket.on('error', err => {
+      if (isClose) resolve('Closed.');
+      // readMessage will also reject; avoid double-call via .catch above
+    });
   });
 }
 
@@ -703,7 +721,8 @@ Flags:
   --user-data-dir=<p>   Persistent profile directory
 
 Environment:
-  WSO2_INTEGRATOR_PATH  Path to Electron binary (auto-detected if unset)`);
+  WSO2_INTEGRATOR_PATH    Path to Electron binary (auto-detected if unset)
+  WSO2IPW_ELECTRON_ARGS   Extra args for Electron (e.g. --no-sandbox for CI)`);
 
 } else if (cmd === 'open') {
   const pid = isDaemonRunning();

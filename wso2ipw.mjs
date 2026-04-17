@@ -383,6 +383,9 @@ async function startDaemonProcess() {
         if (!raw) throw new Error(`Usage: ${cmd} <g:|h:><target> [--force]`);
         const { frame: prefix, target } = parsePrefix(raw);
         const frame = frameFor(prefix);
+        // Ensure pseudo ARIA roles are fresh before resolving locators,
+        // since DOM re-renders may have stripped previously injected attrs.
+        if (prefix === 'g') await injectPseudoElements(frame);
         const forceExplicit = args.includes('--force') ? true
           : args.includes('--no-force') ? false : null;
         const locator = resolveLocator(frame, target);
@@ -416,6 +419,7 @@ async function startDaemonProcess() {
         if (!raw || args.length < 2) throw new Error('Usage: fill <g:|h:><target> <text>');
         const { frame: prefix, target } = parsePrefix(raw);
         const frame = frameFor(prefix);
+        if (prefix === 'g') await injectPseudoElements(frame);
         const text = args.filter(a => a !== raw && !a.startsWith('-')).join(' ');
         const locator = resolveLocator(frame, target);
         // Three input types need different fill strategies:

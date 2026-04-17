@@ -8,7 +8,7 @@ CLI to automate WSO2 Integrator, wrapper around Playwright.
 npm install -g wso2ipw
 ```
 
-WSO2 Integrator must be installed separately.
+WSO2 Integrator must be installed separately. `wso2ipw` auto-detects standard install locations on macOS, Linux, and Windows. If your install is elsewhere, set `WSO2_INTEGRATOR_PATH` to the executable (e.g. `WSO2 Integrator.exe` on Windows, the `Electron` binary inside the `.app` on macOS).
 
 ## Usage
 

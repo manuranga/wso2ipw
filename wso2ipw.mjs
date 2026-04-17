@@ -43,6 +43,98 @@ const ACTION_TIMEOUT = 5000;  // Playwright click/fill, webview frame wait
 const LONG_TIMEOUT   = 30000; // wait-for-text default
 const STARTUP_TIMEOUT = 60000; // daemon startup
 
+function lcs(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--)
+    for (let j = n - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const seq = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { seq.push({ ai: i, bj: j }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  return seq;
+}
+
+// Strip snapshot counter from refs so s5e33 and s6e33 match during LCS.
+function normalizeRefs(line) {
+  return line.replace(/\b([gh]:)?s\d+e(\d+)/g, '$1_e$2');
+}
+
+function unifiedDiff(oldText, newText, context = 3) {
+  const oldL = oldText.split('\n'), newL = newText.split('\n');
+  // LCS on normalized lines so ref counter churn doesn't cause false diffs
+  const common = lcs(oldL.map(normalizeRefs), newL.map(normalizeRefs));
+  const ops = [];
+  let oi = 0, ni = 0;
+  for (const { ai, bj } of common) {
+    while (oi < ai) ops.push({ type: '-', line: oldL[oi++] });
+    while (ni < bj) ops.push({ type: '+', line: newL[ni++] });
+    ops.push({ type: '=', line: newL[ni] });
+    oi++; ni++;
+  }
+  while (oi < oldL.length) ops.push({ type: '-', line: oldL[oi++] });
+  while (ni < newL.length) ops.push({ type: '+', line: newL[ni++] });
+
+  // Collect indices of changed ops, then build context-padded hunks
+  const changes = [];
+  for (let k = 0; k < ops.length; k++) if (ops[k].type !== '=') changes.push(k);
+  if (!changes.length) return null;
+  const hunks = [];
+  let start = Math.max(0, changes[0] - context);
+  let end = Math.min(ops.length, changes[0] + context + 1);
+  for (let c = 1; c < changes.length; c++) {
+    const cs = Math.max(0, changes[c] - context);
+    const ce = Math.min(ops.length, changes[c] + context + 1);
+    if (cs <= end) { end = Math.max(end, ce); }
+    else { hunks.push({ start, end }); start = cs; end = ce; }
+  }
+  hunks.push({ start, end });
+
+  const lines = ['--- previous', '+++ current'];
+  for (const h of hunks) {
+    let oldStart = 1, newStart = 1;
+    for (let k = 0; k < h.start; k++) {
+      if (ops[k].type !== '+') oldStart++;
+      if (ops[k].type !== '-') newStart++;
+    }
+    let oldCount = 0, newCount = 0;
+    for (let k = h.start; k < h.end; k++) {
+      if (ops[k].type !== '+') oldCount++;
+      if (ops[k].type !== '-') newCount++;
+    }
+    lines.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    for (let k = h.start; k < h.end; k++) {
+      const prefix = ops[k].type === '=' ? ' ' : ops[k].type;
+      lines.push(prefix + ops[k].line);
+    }
+  }
+  return compressRemovals(lines).join('\n');
+}
+
+// Collapse runs of >5 consecutive `-` lines to: 2 head, `…`, 2 tail
+function compressRemovals(lines) {
+  const out = [];
+  let run = [];
+  const flushRun = () => {
+    if (run.length > 5) out.push(...run.slice(0, 2), ' …', ...run.slice(-2));
+    else out.push(...run);
+    run = [];
+  };
+  for (const l of lines) {
+    if (l.startsWith('-') && !l.startsWith('---')) { run.push(l); continue; }
+    if (run.length) flushRun();
+    out.push(l);
+  }
+  if (run.length) flushRun();
+  return out;
+}
+
 const INJECT_PSEUDOS_FN = () => {
   // Strip previous cycle
   for (const el of document.querySelectorAll('[data-pseudo]')) {
@@ -337,16 +429,28 @@ async function startDaemonProcess() {
     return text.split('\n').map(l => '  ' + l).join('\n');
   }
 
+  // ── Snapshot diff state ──
+  let lastSnapshot = null;
+
+  function snapshotWithDiff(current, noDiff) {
+    if (noDiff || !lastSnapshot) { lastSnapshot = current; return current; }
+    const diff = unifiedDiff(lastSnapshot, current);
+    lastSnapshot = current;
+    return diff ?? '(no changes)';
+  }
+
   // After a mutation: brief settle, then snapshot.
-  async function settledSnapshot() {
+  async function settledSnapshot(noDiff) {
     await window.waitForTimeout(SETTLE_MS);
-    return await unifiedSnapshot();
+    const snap = await unifiedSnapshot();
+    return snapshotWithDiff(snap, noDiff);
   }
 
   // CM fields need longer settle for LSP validation (1-3s).
-  async function cmSettledSnapshot() {
+  async function cmSettledSnapshot(noDiff) {
     await window.waitForTimeout(SLOW_SETTLE_MS);
-    return await unifiedSnapshot();
+    const snap = await unifiedSnapshot();
+    return snapshotWithDiff(snap, noDiff);
   }
 
   // Check for codicon-warning error text near any CM editor in the frame.
@@ -375,8 +479,11 @@ async function startDaemonProcess() {
   async function handleCommand(cmd, args) {
     switch (cmd) {
 
-      case 'snapshot':
-        return await unifiedSnapshot();
+      case 'snapshot': {
+        const noDiff = args.includes('--no-diff');
+        const snap = await unifiedSnapshot();
+        return snapshotWithDiff(snap, noDiff);
+      }
 
       case 'screenshot': {
         const file = args.find(a => !a.startsWith('-'))
@@ -421,7 +528,8 @@ async function startDaemonProcess() {
           if (cmd === 'dblclick') await locator.dblclick(opts);
           else await locator.click(opts);
         }
-        return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${raw}\n` + await settledSnapshot();
+        const noDiff = args.includes('--no-diff');
+        return `${cmd === 'dblclick' ? 'Double-clicked' : 'Clicked'}: ${raw}\n` + await settledSnapshot(noDiff);
       }
 
       case 'fill': {
@@ -477,9 +585,10 @@ async function startDaemonProcess() {
         }
 
         // For CM fields, wait longer before snapshot — LSP validation takes 1-3s.
+        const noDiff = args.includes('--no-diff');
         const snap = inputType === 'codemirror'
-          ? await cmSettledSnapshot()
-          : await settledSnapshot();
+          ? await cmSettledSnapshot(noDiff)
+          : await settledSnapshot(noDiff);
         const cmErrors = inputType === 'codemirror' ? await checkCmErrors(frame) : '';
         if (cmErrors) throw new Error(`Fill validation error: ${cmErrors}\n${snap}`);
         return `Filled: ${raw}\n` + snap;
@@ -532,8 +641,10 @@ async function startDaemonProcess() {
               })(),
               mainFrame().getByText(text).first().isVisible().catch(() => false),
             ]);
-            if (!guestHas && !hostHas)
-              return `Text hidden: ${text}\n` + await unifiedSnapshot();
+            if (!guestHas && !hostHas) {
+              const snap = await unifiedSnapshot();
+              return `Text hidden: ${text}\n` + snapshotWithDiff(snap, args.includes('--no-diff'));
+            }
             await window.waitForTimeout(POLL_MS);
           }
           throw new Error(`Timeout waiting for text to hide: ${text}`);
@@ -551,11 +662,40 @@ async function startDaemonProcess() {
             })(),
             mainFrame().getByText(text).first().isVisible().catch(() => false),
           ]);
-          if (guestHas || hostHas)
-            return `Text visible: ${text}\n` + await unifiedSnapshot();
+          if (guestHas || hostHas) {
+            const snap = await unifiedSnapshot();
+            return `Text visible: ${text}\n` + snapshotWithDiff(snap, args.includes('--no-diff'));
+          }
           await window.waitForTimeout(POLL_MS);
         }
         throw new Error(`Timeout waiting for text: ${text}`);
+      }
+
+      case 'terminal': {
+        // Terminal renders on <canvas>; text isn't in the DOM.
+        // Select all + copy via keyboard, then read clipboard via Electron main process.
+        const hasTerminal = await mainFrame().evaluate(
+          () => !!document.querySelector('.terminal.xterm')
+        );
+        if (!hasTerminal) throw new Error('No terminal found');
+        // app.evaluate runs in main process; first arg is require('electron')
+        const readClip = () => app.evaluate(({ clipboard }) => clipboard.readText());
+        const writeClip = (text) => app.evaluate(({ clipboard }, text) => clipboard.writeText(text), text);
+        // Save current clipboard, restore after read
+        const saved = await readClip();
+        // Focus terminal, select all, copy
+        await mainFrame().locator('.terminal.xterm').click({ timeout: ACTION_TIMEOUT, force: true });
+        const mod = IS_WIN ? 'Control' : 'Meta';
+        await window.keyboard.press(`${mod}+a`);
+        await window.waitForTimeout(100);
+        await window.keyboard.press(`${mod}+c`);
+        await window.waitForTimeout(100);
+        const text = await readClip();
+        // Restore previous clipboard content
+        await writeClip(saved);
+        // Deselect
+        await window.keyboard.press('Escape');
+        return text.replace(/\n+$/, '');
       }
 
       case 'close': {
@@ -706,7 +846,7 @@ Usage: wso2ipw <command> [args]
 
 Commands:
   open [--user-data-dir=p]      Launch app (fresh temp profile by default)
-  snapshot                      Aria tree of both frames with prefixed refs
+  snapshot [--no-diff]           Aria tree of both frames (diff vs previous by default)
   click <g:|h:><ref> [--force]  Click element (auto --force for g:)
   dblclick <g:|h:><ref>         Double-click element
   fill <g:|h:><ref> <text>      Fill input field
@@ -716,6 +856,7 @@ Commands:
   screenshot [file]             Save screenshot
   wait [ms]                     Sleep (default ${SLOW_SETTLE_MS}ms)
   wait-for-text <text>          Wait for text in either frame (--hidden for disappear)
+  terminal                      Read terminal buffer text (canvas-rendered, from memory)
   close                         Quit the app
 
 Targeting (prefix required):
@@ -728,6 +869,7 @@ Flags:
   --force / --no-force  Override pointer-event checks (auto for g: except vscode-button)
   --timeout=N           Timeout in ms (for wait-for-text)
   --hidden              Wait for text to disappear from both frames
+  --no-diff             Output full snapshot instead of diff against previous
   --user-data-dir=<p>   Persistent profile directory
 
 Environment:

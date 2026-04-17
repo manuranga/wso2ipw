@@ -37,10 +37,12 @@ import { spawn, execSync } from 'child_process';
 // ─── Timeouts ───────────────────────────────────────────────────────────────
 
 const POLL_MS        = 200;   // retry-loop polling interval
+const TERM_POLL_MS   = 500;   // terminal polling (clipboard round-trip is heavier)
 const SETTLE_MS      = 500;   // post-mutation settle before snapshot
 const SLOW_SETTLE_MS = 2000;  // CM/LSP settle, wait default, flush delays
 const ACTION_TIMEOUT = 5000;  // Playwright click/fill, webview frame wait
 const LONG_TIMEOUT   = 30000; // wait-for-text default
+const TERM_TIMEOUT   = 60000; // wait-for-terminal default (compile + start)
 const STARTUP_TIMEOUT = 60000; // daemon startup
 
 function lcs(a, b) {
@@ -412,6 +414,11 @@ async function startDaemonProcess() {
     }).catch(() => true);
   }
 
+  // Replace top-level role (document/application) with frame label.
+  function relabelRoot(snap, label) {
+    return snap.replace(/^- \w+/, `- ${label}`);
+  }
+
   async function unifiedSnapshot() {
     const [guest, host, occluded] = await Promise.all([
       snapshotGuest().catch(() => null),
@@ -419,14 +426,10 @@ async function startDaemonProcess() {
       isGuestOccluded(),
     ]);
     const sections = [];
-    if (guest !== null && !occluded) sections.push(`- guest:\n${indent(prefixRefs(guest, 'g'))}`);
+    if (guest !== null && !occluded) sections.push(relabelRoot(prefixRefs(guest, 'g'), 'guest'));
     else if (guest !== null) sections.push('- guest: [occluded by host overlay]');
-    sections.push(`- host:\n${indent(prefixRefs(host, 'h'))}`);
+    sections.push(relabelRoot(prefixRefs(host, 'h'), 'host'));
     return sections.join('\n');
-  }
-
-  function indent(text) {
-    return text.split('\n').map(l => '  ' + l).join('\n');
   }
 
   // ── Snapshot diff state ──
@@ -459,6 +462,33 @@ async function startDaemonProcess() {
       const icon = document.querySelector('.codicon-warning');
       return icon?.parentElement?.textContent?.trim() || '';
     }).catch(() => '');
+  }
+
+  // ── Terminal read ──
+  // xterm renders on <canvas>; must select-all + copy via keyboard.
+
+  const readClip = () => app.evaluate(({ clipboard }) => clipboard.readText());
+  const writeClip = (t) => app.evaluate(({ clipboard }, t) => clipboard.writeText(t), t);
+  const termMod = IS_WIN ? 'Control' : 'Meta';
+
+  async function readTerminal() {
+    const hasTerminal = await mainFrame().evaluate(
+      () => !!document.querySelector('.terminal.xterm')
+    );
+    if (!hasTerminal) throw new Error('No terminal found');
+    const saved = await readClip();
+    try {
+      await mainFrame().locator('.terminal.xterm').click({ timeout: ACTION_TIMEOUT, force: true });
+      await window.keyboard.press(`${termMod}+a`);
+      await window.waitForTimeout(100);
+      await window.keyboard.press(`${termMod}+c`);
+      await window.waitForTimeout(100);
+      const text = await readClip();
+      await window.keyboard.press('Escape');
+      return text.replace(/\n+$/, '');
+    } finally {
+      await writeClip(saved);
+    }
   }
 
   // ── Locator resolution ──
@@ -672,30 +702,20 @@ async function startDaemonProcess() {
       }
 
       case 'terminal': {
-        // Terminal renders on <canvas>; text isn't in the DOM.
-        // Select all + copy via keyboard, then read clipboard via Electron main process.
-        const hasTerminal = await mainFrame().evaluate(
-          () => !!document.querySelector('.terminal.xterm')
-        );
-        if (!hasTerminal) throw new Error('No terminal found');
-        // app.evaluate runs in main process; first arg is require('electron')
-        const readClip = () => app.evaluate(({ clipboard }) => clipboard.readText());
-        const writeClip = (text) => app.evaluate(({ clipboard }, text) => clipboard.writeText(text), text);
-        // Save current clipboard, restore after read
-        const saved = await readClip();
-        // Focus terminal, select all, copy
-        await mainFrame().locator('.terminal.xterm').click({ timeout: ACTION_TIMEOUT, force: true });
-        const mod = IS_WIN ? 'Control' : 'Meta';
-        await window.keyboard.press(`${mod}+a`);
-        await window.waitForTimeout(100);
-        await window.keyboard.press(`${mod}+c`);
-        await window.waitForTimeout(100);
-        const text = await readClip();
-        // Restore previous clipboard content
-        await writeClip(saved);
-        // Deselect
-        await window.keyboard.press('Escape');
-        return text.replace(/\n+$/, '');
+        return await readTerminal();
+      }
+
+      case 'wait-for-terminal': {
+        const text = args.find(a => !a.startsWith('-'));
+        if (!text) throw new Error('Usage: wait-for-terminal <text> [--timeout=N]');
+        const timeout = parseInt(parseFlag(args, 'timeout') ?? String(TERM_TIMEOUT));
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+          const content = await readTerminal();
+          if (content.includes(text)) return content;
+          await window.waitForTimeout(TERM_POLL_MS);
+        }
+        throw new Error(`Timeout waiting for terminal text: ${text}`);
       }
 
       case 'close': {
@@ -856,6 +876,7 @@ Commands:
   screenshot [file]             Save screenshot
   wait [ms]                     Sleep (default ${SLOW_SETTLE_MS}ms)
   wait-for-text <text>          Wait for text in either frame (--hidden for disappear)
+  wait-for-terminal <text>      Wait for text in terminal buffer
   terminal                      Read terminal buffer text (canvas-rendered, from memory)
   close                         Quit the app
 
@@ -867,7 +888,7 @@ Targeting (prefix required):
 
 Flags:
   --force / --no-force  Override pointer-event checks (auto for g: except vscode-button)
-  --timeout=N           Timeout in ms (for wait-for-text)
+  --timeout=N           Timeout in ms (for wait-for-text, wait-for-terminal)
   --hidden              Wait for text to disappear from both frames
   --no-diff             Output full snapshot instead of diff against previous
   --user-data-dir=<p>   Persistent profile directory

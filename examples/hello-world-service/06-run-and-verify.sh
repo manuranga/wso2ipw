@@ -2,15 +2,12 @@
 set -e
 
 wso2ipw click h:"getByRole('button', {name: 'Run Integration'})"
+wso2ipw wait-for-terminal "Running executable"
 
-for i in $(seq 1 30); do
-  RESPONSE=$(curl -s http://localhost:9090/hello 2>/dev/null || true)
-  if [ "$RESPONSE" = "Hello, World!" ]; then
-    echo "✅ GET /hello → $RESPONSE"
-    exit 0
-  fi
-  sleep 1
-done
-
-echo "❌ Service did not start in time"
-exit 1
+RESPONSE=$(curl -s --retry 5 --retry-delay 1 --retry-connrefused http://localhost:9090/hello)
+if [ "$RESPONSE" = "Hello, World!" ]; then
+  echo "✅ GET /hello → $RESPONSE"
+else
+  echo "❌ Expected 'Hello, World!' but got: $RESPONSE"
+  exit 1
+fi

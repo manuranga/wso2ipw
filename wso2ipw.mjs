@@ -34,6 +34,15 @@ import { spawn, execSync } from 'child_process';
 // Special case: <vscode-button data-testid="close-panel-btn"> already has an
 // implicit button role; we only override its aria-label.
 
+// ─── Timeouts ───────────────────────────────────────────────────────────────
+
+const POLL_MS        = 200;   // retry-loop polling interval
+const SETTLE_MS      = 500;   // post-mutation settle before snapshot
+const SLOW_SETTLE_MS = 2000;  // CM/LSP settle, wait default, flush delays
+const ACTION_TIMEOUT = 5000;  // Playwright click/fill, webview frame wait
+const LONG_TIMEOUT   = 30000; // wait-for-text default
+const STARTUP_TIMEOUT = 60000; // daemon startup
+
 const INJECT_PSEUDOS_FN = () => {
   // Strip previous cycle
   for (const el of document.querySelectorAll('[data-pseudo]')) {
@@ -260,7 +269,7 @@ async function startDaemonProcess() {
   }
 
   // Poll until a live webview frame with buttons exists.
-  async function ensureWebviewFrame(timeoutMs = 10000) {
+  async function ensureWebviewFrame(timeoutMs = ACTION_TIMEOUT) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const f = webviewFrame();
@@ -268,7 +277,7 @@ async function startDaemonProcess() {
         try { if (await f.evaluate(() => document.querySelectorAll('button').length) > 0) return f; }
         catch {}
       }
-      await window.waitForTimeout(200);
+      await window.waitForTimeout(POLL_MS);
     }
     throw new Error('Guest frame not available (timeout)');
   }
@@ -283,7 +292,7 @@ async function startDaemonProcess() {
     let frame = webviewFrame();
     if (!frame) frame = await ensureWebviewFrame();
     else {
-      try { await frame.locator('body').waitFor({ timeout: 500 }); }
+      try { await frame.locator('body').waitFor({ timeout: SETTLE_MS }); }
       catch { frame = await ensureWebviewFrame(); }
     }
     await injectPseudoElements(frame);
@@ -329,13 +338,13 @@ async function startDaemonProcess() {
 
   // After a mutation: brief settle, then snapshot.
   async function settledSnapshot() {
-    await window.waitForTimeout(500);
+    await window.waitForTimeout(SETTLE_MS);
     return await unifiedSnapshot();
   }
 
   // CM fields need longer settle for LSP validation (1-3s).
   async function cmSettledSnapshot() {
-    await window.waitForTimeout(2000);
+    await window.waitForTimeout(SLOW_SETTLE_MS);
     return await unifiedSnapshot();
   }
 
@@ -407,7 +416,7 @@ async function startDaemonProcess() {
           });
         } else {
           const force = forceExplicit ?? (prefix === 'g');
-          const opts = { timeout: 5000, force };
+          const opts = { timeout: ACTION_TIMEOUT, force };
           if (cmd === 'dblclick') await locator.dblclick(opts);
           else await locator.click(opts);
         }
@@ -441,7 +450,7 @@ async function startDaemonProcess() {
           // Playwright's locator already resolved to the shadow <input>,
           // so fill() works directly.  Afterwards, blur the FAST host to
           // trigger framework validation.
-          await locator.fill(text, { timeout: 5000 });
+          await locator.fill(text, { timeout: ACTION_TIMEOUT });
           await locator.evaluate(el => {
             const host = el.getRootNode()?.host;
             el.blur();
@@ -463,7 +472,7 @@ async function startDaemonProcess() {
             });
           }, text);
         } else {
-          await locator.fill(text, { timeout: 5000 });
+          await locator.fill(text, { timeout: ACTION_TIMEOUT });
         }
 
         // For CM fields, wait longer before snapshot — LSP validation takes 1-3s.
@@ -498,7 +507,7 @@ async function startDaemonProcess() {
       }
 
       case 'wait': {
-        const ms = parseInt(args[0]) || 2000;
+        const ms = parseInt(args[0]) || SLOW_SETTLE_MS;
         await window.waitForTimeout(ms);
         return `Waited ${ms}ms`;
       }
@@ -506,7 +515,7 @@ async function startDaemonProcess() {
       case 'wait-for-text': {
         const text = args.find(a => !a.startsWith('-'));
         if (!text) throw new Error('Usage: wait-for-text <text> [--timeout=N] [--hidden]');
-        const timeout = parseInt(parseFlag(args, 'timeout') ?? '30000');
+        const timeout = parseInt(parseFlag(args, 'timeout') ?? String(LONG_TIMEOUT));
         const hidden = args.includes('--hidden');
 
         if (hidden) {
@@ -524,7 +533,7 @@ async function startDaemonProcess() {
             ]);
             if (!guestHas && !hostHas)
               return `Text hidden: ${text}\n` + await unifiedSnapshot();
-            await window.waitForTimeout(200);
+            await window.waitForTimeout(POLL_MS);
           }
           throw new Error(`Timeout waiting for text to hide: ${text}`);
         }
@@ -543,7 +552,7 @@ async function startDaemonProcess() {
           ]);
           if (guestHas || hostHas)
             return `Text visible: ${text}\n` + await unifiedSnapshot();
-          await window.waitForTimeout(200);
+          await window.waitForTimeout(POLL_MS);
         }
         throw new Error(`Timeout waiting for text: ${text}`);
       }
@@ -576,7 +585,7 @@ async function startDaemonProcess() {
           // Wait for the response to flush before exiting.
           socket.on('close', () => process.exit(0));
           // Safety: exit anyway after 2s if socket lingers.
-          setTimeout(() => process.exit(0), 2000).unref();
+          setTimeout(() => process.exit(0), SLOW_SETTLE_MS).unref();
         }
       } catch (err) {
         log(`ERR: ${cmd}: ${err.message}`);
@@ -677,7 +686,7 @@ function spawnDaemon(userDataDir) {
     });
     const timer = setTimeout(() => {
       if (!output.includes('ready')) { child.kill(); reject(new Error('Daemon startup timed out')); }
-    }, 60000);
+    }, STARTUP_TIMEOUT);
     timer.unref();
   });
 }
@@ -704,7 +713,7 @@ Commands:
   press <key>                   Press key (Enter, Tab, Meta+k, etc.)
   eval <g:|h:><js>              Evaluate JS in frame
   screenshot [file]             Save screenshot
-  wait [ms]                     Sleep (default 2000ms)
+  wait [ms]                     Sleep (default ${SLOW_SETTLE_MS}ms)
   wait-for-text <text>          Wait for text in either frame (--hidden for disappear)
   close                         Quit the app
 
@@ -735,7 +744,7 @@ Environment:
       killApp();
       try { fs.unlinkSync(SOCKET()); } catch {}
       try { fs.unlinkSync(PID_FILE()); } catch {}
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, SLOW_SETTLE_MS));
       await spawnDaemon(parseFlag(args, 'user-data-dir'));
       console.log(`WSO2 Integrator is ready. (restarted)\nLog: ${DAEMON_LOG()}`);
     }

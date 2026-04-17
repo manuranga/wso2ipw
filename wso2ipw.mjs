@@ -98,10 +98,11 @@ const INJECT_PSEUDOS_FN = () => {
   for (let i = els.length - 1; i >= 0; i--) {
     const el = els[i];
     if (dominated(el) || el.querySelector('[data-pseudo]')) continue;
-    if (el.parentElement?.closest('button,a,[role]:not([role="document"]):not([role="main"]):not([role="navigation"]):not([role="region"]):not([role="complementary"]):not([role="contentinfo"]):not([role="banner"]):not(body)')) continue;
+    if (el.parentElement?.closest('button,a,vscode-button,[role]:not([role="document"]):not([role="main"]):not([role="navigation"]):not([role="region"]):not([role="complementary"]):not([role="contentinfo"]):not([role="banner"]):not(body)')) continue;
     const text = el.textContent?.trim();
     if (!text || text.length > 50) continue;
     if ([...el.children].some(c => c.textContent?.trim())) continue;
+    if (el.querySelector('button, vscode-button, [role="button"]')) continue;
     if (getComputedStyle(el).cursor !== 'pointer') continue;
     tag(el, text);
   }

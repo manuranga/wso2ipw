@@ -344,6 +344,49 @@ async function startDaemonProcess() {
 
   function mainFrame() { return window.frames()[0]; }
 
+  // Click via mouse coordinates — bypasses actionability checks while
+  // producing trusted pointer events (unlike Playwright's force option).
+  // Translates element coords from a nested iframe to the top-level window.
+  async function guestMouseClick(frame, locator, dblclick) {
+    // Get element center in the guest frame's viewport
+    const elBox = await locator.evaluate(el => {
+      el.scrollIntoView({ block: 'nearest' });
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    // Walk up the frame chain, accumulating iframe offsets.
+    // Each parent frame has an <iframe> whose src matches the child frame's url.
+    let x = elBox.x, y = elBox.y;
+    let f = frame;
+    while (f !== mainFrame() && f.parentFrame()) {
+      const parent = f.parentFrame();
+      const childUrl = f.url();
+      const offset = await parent.evaluate((url) => {
+        for (const iframe of document.querySelectorAll('iframe')) {
+          try {
+            if (iframe.src === url || iframe.contentWindow?.location?.href === url) {
+              const r = iframe.getBoundingClientRect();
+              return { x: r.x, y: r.y };
+            }
+          } catch {}
+        }
+        // Fallback: find any webview iframe
+        const iframe = document.querySelector('iframe');
+        if (iframe) { const r = iframe.getBoundingClientRect(); return { x: r.x, y: r.y }; }
+        return { x: 0, y: 0 };
+      }, childUrl);
+      x += offset.x;
+      y += offset.y;
+      f = parent;
+    }
+    const mouse = window.mouse;
+    if (dblclick) {
+      await mouse.dblclick(x, y);
+    } else {
+      await mouse.click(x, y);
+    }
+  }
+
   // ── Ref prefix parsing ──
 
   function parsePrefix(target) {
@@ -472,6 +515,9 @@ async function startDaemonProcess() {
   const termMod = IS_WIN ? 'Control' : 'Meta';
 
   async function readTerminal(name) {
+    // Ensure the Terminal tab is active (panel may show Debug Console, Output, etc.)
+    const termTab = mainFrame().getByRole('tab', { name: /^Terminal/ });
+    try { await termTab.click({ timeout: 1500, force: true }); } catch {}
     const termSel = '.terminal-wrapper > div > .terminal.xterm';
     const terminals = await mainFrame().locator(termSel).all();
     if (terminals.length === 0) throw new Error('No terminal found');
@@ -549,34 +595,20 @@ async function startDaemonProcess() {
       case 'click':
       case 'dblclick': {
         const raw = args.find(a => !a.startsWith('-'));
-        if (!raw) throw new Error(`Usage: ${cmd} <g:|h:><target> [--force]`);
+        if (!raw) throw new Error(`Usage: ${cmd} <g:|h:><target>`);
         const { frame: prefix, target } = parsePrefix(raw);
         const frame = frameFor(prefix);
         // Ensure pseudo ARIA roles are fresh before resolving locators,
         // since DOM re-renders may have stripped previously injected attrs.
         if (prefix === 'g') await injectPseudoElements(frame);
-        const forceExplicit = args.includes('--force') ? true
-          : args.includes('--no-force') ? false : null;
         const locator = resolveLocator(frame, target);
-
-        // <vscode-button> has a shadow DOM <button> that must receive the click.
-        // Playwright force-click bypasses shadow DOM propagation; non-force times
-        // out when overlays cover the button. So we click the shadow button via JS.
-        const isVscodeBtn = await locator.evaluate(
-          el => el.tagName === 'VSCODE-BUTTON'
-            || el.closest?.('vscode-button') !== null
-        ).catch(() => false);
-
-        if (isVscodeBtn && cmd === 'click' && forceExplicit === null) {
-          await locator.evaluate(el => {
-            const host = el.tagName === 'VSCODE-BUTTON' ? el : el.closest('vscode-button');
-            if (host?.disabled) throw new Error('Button is disabled');
-            const btn = host?.shadowRoot?.querySelector('button');
-            (btn || host).click();
-          });
+        if (prefix === 'g') {
+          // Guest frame: click via mouse coordinates to get trusted pointer
+          // events without actionability checks (overlays block non-forced
+          // clicks, and force-clicks produce synthetic untrusted events).
+          await guestMouseClick(frame, locator, cmd === 'dblclick');
         } else {
-          const force = forceExplicit ?? (prefix === 'g');
-          const opts = { timeout: ACTION_TIMEOUT, force };
+          const opts = { timeout: ACTION_TIMEOUT };
           if (cmd === 'dblclick') await locator.dblclick(opts);
           else await locator.click(opts);
         }
@@ -891,7 +923,7 @@ Usage: wso2ipw <command> [args]
 Commands:
   open [--user-data-dir=p]      Launch app (fresh temp profile by default)
   snapshot [--no-diff]           Aria tree of both frames (diff vs previous by default)
-  click <g:|h:><ref> [--force]  Click element (auto --force for g:)
+  click <g:|h:><ref>            Click element
   dblclick <g:|h:><ref>         Double-click element
   fill <g:|h:><ref> <text>      Fill input field
   type <text>                   Type via keyboard
@@ -911,7 +943,6 @@ Targeting (prefix required):
   h:"getByRole('button', {name:'X'})" Playwright locator in host
 
 Flags:
-  --force / --no-force  Override pointer-event checks (auto for g: except vscode-button)
   --timeout=N           Timeout in ms (for wait-for-text, wait-for-terminal)
   --hidden              Wait for text to disappear from both frames
   --no-diff             Output full snapshot instead of diff against previous

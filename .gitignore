@@ -1,3 +1,7 @@
 .wso2ipw/
 *.png
 node_modules/
+daemon.mjs
+*.md.bak
+open.sh
+utils.js

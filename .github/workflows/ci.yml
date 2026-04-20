@@ -51,7 +51,9 @@ jobs:
           echo "WSO2_INTEGRATOR_PATH=$(realpath $BINARY)" >> "$GITHUB_ENV"
 
       - name: Install wso2ipw from source
-        run: npm install -g .
+        run: |
+          npm install
+          npm link
 
       - name: Run smoke test
         run: |

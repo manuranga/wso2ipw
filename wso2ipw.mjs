@@ -43,7 +43,7 @@ const SLOW_SETTLE_MS = 2000;  // CM/LSP settle, wait default, flush delays
 const ACTION_TIMEOUT = 5000;  // Playwright click/fill, webview frame wait
 const LONG_TIMEOUT   = 30000; // wait-for-text default
 const TERM_TIMEOUT   = 60000; // wait-for-terminal default (compile + start)
-const STARTUP_TIMEOUT = 60000; // daemon startup
+const STARTUP_TIMEOUT = 120000; // daemon startup
 
 function lcs(a, b) {
   const m = a.length, n = b.length;

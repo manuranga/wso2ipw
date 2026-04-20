@@ -499,10 +499,10 @@ async function startDaemonProcess() {
     return snapshotWithDiff(snap, noDiff);
   }
 
-  // Check for codicon-warning error text near any CM editor in the frame.
+  // Check for codicon-warning/error text near any CM editor in the frame.
   async function checkCmErrors(frame) {
     return frame.evaluate(() => {
-      const icon = document.querySelector('.codicon-warning');
+      const icon = document.querySelector('.codicon-warning') || document.querySelector('.codicon-error');
       return icon?.parentElement?.textContent?.trim() || '';
     }).catch(() => '');
   }
@@ -635,15 +635,32 @@ async function startDaemonProcess() {
           // Playwright aria-refs pierce shadow DOM: the locator may resolve to
           // the <input> inside a shadow root rather than the host element.
           if (el.getRootNode() instanceof ShadowRoot) return 'shadow';
-          if (el.closest?.('.cm-editor') || el.classList?.contains('cm-content')) return 'codemirror';
+          if (el.closest?.('.cm-editor') || el.classList?.contains('cm-content') || el.querySelector?.('.cm-editor')) return 'codemirror';
           return 'default';
         }).catch(() => 'default');
 
         if (inputType === 'shadow') {
-          // Playwright's locator already resolved to the shadow <input>,
-          // so fill() works directly.  Afterwards, blur the FAST host to
-          // trigger framework validation.
-          await locator.fill(text, { timeout: ACTION_TIMEOUT });
+          // Two sub-cases:
+          //   a) Locator resolved to the HOST element (has shadowRoot) —
+          //      fill the inner shadow <input>/<textarea> via evaluate.
+          //   b) Locator resolved to the shadow <input> itself (ARIA pierced) —
+          //      Playwright fill() works directly.
+          const isHost = await locator.evaluate(el => !!el.shadowRoot);
+          if (isHost) {
+            await locator.evaluate((el, text) => {
+              const input = el.shadowRoot.querySelector('input, textarea');
+              if (!input) throw new Error('No input/textarea in shadow root');
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value'
+              )?.set;
+              if (nativeSetter) nativeSetter.call(input, text);
+              else input.value = text;
+              input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+            }, text);
+          } else {
+            await locator.fill(text, { timeout: ACTION_TIMEOUT });
+          }
           await locator.evaluate(el => {
             const host = el.getRootNode()?.host;
             el.blur();
@@ -654,15 +671,19 @@ async function startDaemonProcess() {
           // CM's internal state. keyboard.type() triggers autocomplete that
           // swallows chars. keyboard.press() misroutes after frame operations.
           // Solution: use CM6's view.dispatch() to replace the document directly.
+          await locator.scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT });
           await locator.evaluate((el, text) => {
             const content = el.closest?.('.cm-editor')?.querySelector('.cm-content') ||
-              (el.classList?.contains('cm-content') ? el : null);
+              (el.classList?.contains('cm-content') ? el : null) ||
+              el.querySelector?.('.cm-editor')?.querySelector('.cm-content');
             const view = content?.cmView?.view;
             if (!view) throw new Error('CM view not found');
             view.focus();
             view.dispatch({
               changes: { from: 0, to: view.state.doc.length, insert: text }
             });
+            // Force CM6 to re-render (it skips repaint for off-screen editors)
+            view.requestMeasure();
           }, text);
         } else {
           await locator.fill(text, { timeout: ACTION_TIMEOUT });
@@ -674,7 +695,7 @@ async function startDaemonProcess() {
           ? await cmSettledSnapshot(noDiff)
           : await settledSnapshot(noDiff);
         const cmErrors = inputType === 'codemirror' ? await checkCmErrors(frame) : '';
-        if (cmErrors) throw new Error(`Fill validation error: ${cmErrors}\n${snap}`);
+        if (cmErrors) log(`CM warning (non-fatal): ${cmErrors}`);
         return `Filled: ${raw}\n` + snap;
       }
 
@@ -767,8 +788,14 @@ async function startDaemonProcess() {
         const timeout = parseInt(parseFlag(args, 'timeout') ?? String(TERM_TIMEOUT));
         const deadline = Date.now() + timeout;
         while (Date.now() < deadline) {
-          const content = await readTerminal(termName);
-          if (content.includes(text)) return content;
+          try {
+            const content = await readTerminal(termName);
+            if (content.includes(text)) return content;
+          } catch (e) {
+            // Terminal may not exist yet (e.g. just clicked Run Integration).
+            // Retry until deadline.
+            log(`wait-for-terminal: ${e.message}, retrying...`);
+          }
           await window.waitForTimeout(TERM_POLL_MS);
         }
         throw new Error(`Timeout waiting for terminal text: ${text}`);

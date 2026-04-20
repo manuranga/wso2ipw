@@ -45,10 +45,11 @@ Required for all ref-targeting commands
 
 - app: open [--user-data-dir=path], close
 - inspect: snapshot, screenshot [file], eval <g:|h:><js>
-- interact: click/dblclick <g:|h:><ref> [--force], fill <g:|h:><ref> <text>
+- interact: click/dblclick <g:|h:><ref>, fill <g:|h:><ref> <text> (fill auto-detects input type (normal, cm, shadow). Use fill over type for input boxes)
 - keys: type <text>, press <key>
-- util: wait [ms], wait-for-text <text> [--timeout=N] [--hidden]
-- flags: --force (bypass overlay/pointer-event checks, default for g:)
+- terminal: terminal [--terminal=<name>], wait-for-terminal <text> [--timeout=N] [--terminal=<name>]
+- delay: wait [ms], wait-for-text <text> [--timeout=N] [--hidden]
+- flags: --no-diff (show the full snapshot)
 
 ## Architecture
 

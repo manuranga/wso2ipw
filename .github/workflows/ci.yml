@@ -10,9 +10,13 @@ permissions:
 
 jobs:
   smoke-test:
-    name: Smoke Test
+    name: ${{ matrix.example }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [hello-world-service, icp]
     env:
       DISPLAY: ':99'
       WSO2IPW_ELECTRON_ARGS: '--no-sandbox'
@@ -55,31 +59,15 @@ jobs:
           npm install
           npm link
 
-      - name: Run smoke test
-        run: |
-          EXAMPLES="$(npm root -g)/wso2ipw/examples/hello-world-service"
-          for step in "$EXAMPLES"/0*.sh; do
-            name=$(basename "$step")
-            echo ""
-            echo "═══ $name ═══"
-            bash "$step" || {
-              echo "FAIL: $name" >&2
-              wso2ipw screenshot "failure-${name%.sh}.png" 2>/dev/null || true
-              wso2ipw close 2>/dev/null || true
-              exit 1
-            }
-            echo "✓ $name"
-          done
-          echo ""
-          echo "═══ SMOKE TEST PASSED ✓ ═══"
-          wso2ipw close 2>/dev/null || true
+      - name: Run ${{ matrix.example }}
+        run: bash "$(npm root -g)/wso2ipw/examples/${{ matrix.example }}/run-all.sh"
 
       - name: Upload screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-test-screenshots
-          path: failure-*.png
+          name: screenshots-${{ matrix.example }}
+          path: "*.png"
           if-no-files-found: ignore
 
   publish:

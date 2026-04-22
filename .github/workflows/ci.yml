@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [hello-world-service, icp]
+        example: [hello-world-service]  # icp requires separate ICP install
     env:
       DISPLAY: ':99'
       WSO2IPW_ELECTRON_ARGS: '--no-sandbox'

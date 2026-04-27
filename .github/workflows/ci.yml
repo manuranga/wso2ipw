@@ -4,22 +4,28 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      os:
+        description: 'OS to test (blank = all)'
+        type: choice
+        options: ['', 'ubuntu-latest', 'windows-latest']
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
   smoke-test:
-    name: ${{ matrix.example }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.example }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        os: ${{ inputs.os && fromJSON(format('["{0}"]', inputs.os)) || fromJSON('["ubuntu-latest","windows-latest"]') }}
         example: [hello-world-service]  # icp requires separate ICP install
     env:
       DISPLAY: ':99'
-      WSO2IPW_ELECTRON_ARGS: '--no-sandbox'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +35,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install system dependencies
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -38,14 +45,18 @@ jobs:
             libx11-xcb1 libdrm2 libxcomposite1 libxdamage1 \
             libxrandr2 libatk-bridge2.0-0 libatspi2.0-0 libcups2
 
-      - name: Start Xvfb
+      - name: Start Xvfb (Linux)
+        if: runner.os == 'Linux'
         run: |
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-      - name: Download WSO2 Integrator
+      - name: Download WSO2 Integrator (Linux)
+        if: runner.os == 'Linux'
         run: |
-          VERSION="5.0.0-alpha6"
+          VERSION=$(curl -fsSL https://api.github.com/repos/wso2/product-integrator/releases/latest \
+            | jq -r '.tag_name | ltrimstr("v")')
+          echo "Latest version: $VERSION"
           TARBALL="wso2-integrator-${VERSION}-linux-x64.tar.gz"
           URL="https://github.com/wso2/product-integrator/releases/download/v${VERSION}/${TARBALL}"
           curl -fSL -o "$TARBALL" "$URL"
@@ -54,19 +65,46 @@ jobs:
           chmod +x "$BINARY"
           echo "WSO2_INTEGRATOR_PATH=$(realpath $BINARY)" >> "$GITHUB_ENV"
 
+      - name: Download WSO2 Integrator (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod https://api.github.com/repos/wso2/product-integrator/releases/latest
+          $version = $release.tag_name -replace '^v',''
+          Write-Host "Latest version: $version"
+          $msi = "wso2-integrator-${version}.msi"
+          $url = "https://github.com/wso2/product-integrator/releases/download/v${version}/${msi}"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          # MSI fails with Error 1304 (MAX_PATH on deep Ballerina paths).
+          # Install to short path via INTEGRATORFOLDER property.
+          reg add 'HKLM\SYSTEM\CurrentControlSet\Control\FileSystem' /v LongPathsEnabled /t REG_DWORD /d 1 /f
+          $installDir = 'C:\w\'
+          $msiPath = Resolve-Path $msi
+          $proc = Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart INTEGRATORFOLDER=`"$installDir`"" -Wait -PassThru
+          Write-Host "msiexec exit code: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
+          $binary = Get-ChildItem $installDir -Recurse -Filter 'WSO2 Integrator.exe' -Depth 2 |
+            Select-Object -First 1
+          if (-not $binary) { throw 'WSO2 Integrator.exe not found after MSI install' }
+          Write-Host "Binary: $($binary.FullName)"
+          "WSO2_INTEGRATOR_PATH=$($binary.FullName)" | Out-File -Append $env:GITHUB_ENV
+
       - name: Install wso2ipw from source
         run: |
           npm install
           npm link
 
       - name: Run ${{ matrix.example }}
+        shell: bash
+        env:
+          WSO2IPW_ELECTRON_ARGS: ${{ runner.os == 'Linux' && '--no-sandbox' || '' }}
         run: bash "$(npm root -g)/wso2ipw/examples/${{ matrix.example }}/run-all.sh"
 
       - name: Upload screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshots-${{ matrix.example }}
+          name: screenshots-${{ matrix.example }}-${{ matrix.os }}
           path: "*.png"
           if-no-files-found: ignore
 

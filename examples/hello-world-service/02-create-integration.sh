@@ -10,4 +10,4 @@ wso2ipw click g:"getByRole('button', {name: 'Create', exact: true})"
 wso2ipw fill g:"getByRole('textbox', {name: /Integration Name/})" "$INTEGRATION_NAME"
 wso2ipw fill g:"getByRole('textbox', {name: /Project Name/})" "$PROJECT_NAME"
 wso2ipw click g:"getByRole('button', {name: 'Create Integration'})"
-wso2ipw wait-for-text "Deployment Options" --timeout=15000
+wso2ipw wait-for-text "Deployment Options" --timeout=60000

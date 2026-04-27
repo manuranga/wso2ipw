@@ -1,33 +1,36 @@
 #!/bin/bash
 set -e
 
+PC="npx playwright-cli"
+
 INTEGRATION_NAME=${INTEGRATION_NAME:-"HelloWorld"}
-PROJECT_NAME=$(echo "$INTEGRATION_NAME" | tr '[:upper:]' '[:lower:]')
+PROJECT_NAME=${PROJECT_NAME:-"HelloProject"}
+ICP_PROJECT=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[0-9]*$//')
+ICP_INTEGRATION=$(echo "$INTEGRATION_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[0-9]*$//')
 
-playwright-cli open --headed "https://localhost:9446"
-
-playwright-cli fill 'input[placeholder="Enter username"]' "admin"
-playwright-cli fill 'input[placeholder="Enter password"]' "admin"
-playwright-cli click 'button:has-text("Sign In")'
-
+$PC open --headed "https://localhost:9446"
 sleep 3
-playwright-cli fill 'input[placeholder="Search projects"]' "$PROJECT_NAME"
+
+$PC fill 'input[placeholder="Enter username"]' "admin"
+$PC fill 'input[placeholder="Enter password"]' "admin"
+$PC click 'button:has-text("Sign In")'
+sleep 3
+
+$PC click "h6:has-text(\"$ICP_PROJECT\")"
 sleep 2
-playwright-cli screenshot --filename icp-dashboard-screenshots.png
+$PC click "td:has-text(\"$ICP_INTEGRATION\")"
 
-playwright-cli snapshot | grep -q "$PROJECT_NAME" || { echo "❌ Project $PROJECT_NAME not found in ICP"; exit 1; }
+for i in $(seq 1 15); do
+  sleep 5
+  $PC goto "https://localhost:9446/organizations/default/projects/$ICP_PROJECT/components/$ICP_INTEGRATION" 2>/dev/null || true
+  sleep 2
+  SNAPSHOT=$($PC snapshot 2>&1)
+  if echo "$SNAPSHOT" | grep -q "1/1 Online"; then break; fi
+  echo "Waiting for runtime to come online... ($i/15)"
+done
 
-
-playwright-cli click "h6:has-text(\"$PROJECT_NAME\")"
-sleep 2
-
-playwright-cli click "td:has-text(\"$PROJECT_NAME\")"
-sleep 2
-playwright-cli screenshot --filename icp-integration-screenshots.png
-
-SNAPSHOT=$(playwright-cli snapshot)
 echo "$SNAPSHOT" | grep -q "1/1 Online" || { echo "❌ Runtime not online in ICP"; exit 1; }
 echo "$SNAPSHOT" | grep -q "/hello" || { echo "❌ GET /hello endpoint not found in ICP"; exit 1; }
+echo "✅ ICP dashboard: $ICP_INTEGRATION 1/1 Online, /hello"
 
-playwright-cli close
-
+$PC close

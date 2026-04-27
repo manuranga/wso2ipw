@@ -5,3 +5,5 @@ daemon.mjs
 *.md.bak
 open.sh
 utils.js
+.playwright-cli/
+Dockerfile.ci

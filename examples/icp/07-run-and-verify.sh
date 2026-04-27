@@ -1,15 +1,18 @@
 #!/bin/bash
 set -e
 
-wso2ipw click g:"getByText('Run', {exact: true})"
+for i in $(seq 1 30); do
+  RESPONSE=$(curl -s http://localhost:9090/hello 2>/dev/null || true)
+  if [ "$RESPONSE" = "Hello, World!" ]; then
+    echo "✅ GET /hello → $RESPONSE"
+    break
+  fi
+  sleep 2
+done
 
-RESPONSE=$(curl -s --retry 15 --retry-delay 3 --retry-connrefused http://localhost:9090/hello)
-if [ "$RESPONSE" = "Hello, World!" ]; then
-  echo "✅ GET /hello → $RESPONSE"
-else
-  echo "❌ Expected 'Hello, World!' but got: $RESPONSE"
+if [ "$RESPONSE" != "Hello, World!" ]; then
+  echo "❌ Service did not respond within 60s"
   exit 1
 fi
 
 wso2ipw wait-for-text "ICP: Running"
-

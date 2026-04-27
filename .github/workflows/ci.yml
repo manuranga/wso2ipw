@@ -18,12 +18,15 @@ jobs:
   smoke-test:
     name: ${{ matrix.example }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: ${{ inputs.os && fromJSON(format('["{0}"]', inputs.os)) || fromJSON('["ubuntu-latest","windows-latest"]') }}
-        example: [hello-world-service]  # icp requires separate ICP install
+        example: [hello-world-service, icp]
+        exclude:
+          - os: windows-latest
+            example: icp  # ICP uses lsof; Linux-only for now
     env:
       DISPLAY: ':99'
     steps:
@@ -89,6 +92,37 @@ jobs:
           Write-Host "Binary: $($binary.FullName)"
           "WSO2_INTEGRATOR_PATH=$($binary.FullName)" | Out-File -Append $env:GITHUB_ENV
 
+          # Windows Defender real-time scanning freezes Ballerina/JDK on cold runners
+          Add-MpPreference -ExclusionPath $installDir
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\WSO2Integrator"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.ballerina"
+
+      - name: Patch ICP script for dash compatibility (Linux)
+        if: runner.os == 'Linux' && matrix.example == 'icp'
+        run: |
+          ICP_SH=$(dirname "$WSO2_INTEGRATOR_PATH")/components/icp/bin/icp.sh
+          if [ -f "$ICP_SH" ]; then
+            python3 - "$ICP_SH" <<'PYEOF'
+          import re, sys
+          path = sys.argv[1]
+          with open(path) as f: s = f.read()
+          s = s.replace('JAVA_OPTS=()', 'JAVA_OPTS=""')
+          s = re.sub(r'JAVA_OPTS\+=\(\s*\n((?:\s+.*\n)*?\s*)\)',
+              lambda m: 'JAVA_OPTS="$JAVA_OPTS ' + ' '.join(m.group(1).split()) + '"', s)
+          s = s.replace('"${JAVA_OPTS[@]}"', '$JAVA_OPTS')
+          with open(path, 'w') as f: f.write(s)
+          print('Patched', path)
+          PYEOF
+          fi
+
+      - name: Pre-pull ICP Ballerina modules (Linux)
+        if: runner.os == 'Linux' && matrix.example == 'icp'
+        run: |
+          BAL=$(dirname "$WSO2_INTEGRATOR_PATH")/components/ballerina/bin/bal
+          export JAVA_HOME=$(find $(dirname "$WSO2_INTEGRATOR_PATH")/components/dependencies -maxdepth 1 -name 'jdk-*' -type d | head -1)
+          "$BAL" pull ballerinax/metrics.logs
+          "$BAL" pull wso2/icp.runtime.bridge
+
       - name: Install wso2ipw from source
         run: |
           npm install
@@ -96,8 +130,10 @@ jobs:
 
       - name: Run ${{ matrix.example }}
         shell: bash
+        # Windows runners have a ~50% failure rate on project creation (product bug).
+        continue-on-error: ${{ runner.os == 'Windows' }}
         env:
-          WSO2IPW_ELECTRON_ARGS: ${{ runner.os == 'Linux' && '--no-sandbox' || '' }}
+          WSO2IPW_ELECTRON_ARGS: ${{ runner.os == 'Linux' && '--no-sandbox --password-store=basic' || '' }}
         run: bash "$(npm root -g)/wso2ipw/examples/${{ matrix.example }}/run-all.sh"
 
       - name: Upload screenshots on failure

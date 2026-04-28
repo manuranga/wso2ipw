@@ -22,5 +22,4 @@ trap 'wso2ipw close 2>/dev/null' EXIT
 DIR="$(cd "$(dirname "$0")" && pwd)"
 for f in "$DIR"/0[1-7]*.sh; do bash "$f"; done
 
-# ICP dashboard verification is best-effort (runtime bridge registration is slow)
-bash "$DIR"/08-verify-icp.sh || echo "⚠️  ICP dashboard verification failed (non-fatal)"
+bash "$DIR"/08-verify-icp.sh

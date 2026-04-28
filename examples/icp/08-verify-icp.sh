@@ -29,11 +29,7 @@ for i in $(seq 1 30); do
   echo "Waiting for runtime to come online... ($i/30)"
 done
 
-if ! echo "$SNAPSHOT" | grep -q "1/1 Online"; then
-  echo "$SNAPSHOT"
-  echo "❌ Runtime not online in ICP"
-  exit 1
-fi
+echo "$SNAPSHOT" | grep -q "1/1 Online" || { echo "$SNAPSHOT"; echo "❌ Runtime not online in ICP"; exit 1; }
 echo "$SNAPSHOT" | grep -q "/hello" || { echo "❌ GET /hello endpoint not found in ICP"; exit 1; }
 echo "✅ ICP dashboard: $ICP_INTEGRATION 1/1 Online, /hello"
 

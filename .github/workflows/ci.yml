@@ -144,16 +144,13 @@ jobs:
           npx playwright install --with-deps chrome
 
       - name: Run ${{ matrix.example }}
-        id: run
         shell: bash
-        # Windows runners have a ~50% failure rate on project creation (product bug).
-        continue-on-error: ${{ runner.os == 'Windows' }}
         env:
           WSO2IPW_ELECTRON_ARGS: ${{ runner.os == 'Linux' && '--no-sandbox --password-store=basic' || '' }}
         run: bash "$(npm root -g)/wso2ipw/examples/${{ matrix.example }}/run-all.sh"
 
       - name: Upload screenshots on failure
-        if: failure() || steps.run.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: screenshots-${{ matrix.example }}-${{ matrix.os }}

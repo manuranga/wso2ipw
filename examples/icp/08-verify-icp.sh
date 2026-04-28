@@ -5,8 +5,8 @@ PC="npx playwright-cli"
 
 INTEGRATION_NAME=${INTEGRATION_NAME:-"HelloWorld"}
 PROJECT_NAME=${PROJECT_NAME:-"HelloProject"}
-ICP_PROJECT=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[0-9]*$//')
-ICP_INTEGRATION=$(echo "$INTEGRATION_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[0-9]*$//')
+ICP_PROJECT=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]')
+ICP_INTEGRATION=$(echo "$INTEGRATION_NAME" | tr '[:upper:]' '[:lower:]')
 
 $PC open --headed "https://localhost:9446"
 sleep 3

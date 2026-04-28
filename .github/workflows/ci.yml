@@ -18,15 +18,13 @@ jobs:
   smoke-test:
     name: ${{ matrix.example }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: ${{ inputs.os && fromJSON(format('["{0}"]', inputs.os)) || fromJSON('["ubuntu-latest","windows-latest"]') }}
         example: [hello-world-service, icp]
-        exclude:
-          - os: windows-latest
-            example: icp  # ICP uses lsof; Linux-only for now
+        # exclude: none — ICP runs on both OSes
     env:
       DISPLAY: ':99'
     steps:
@@ -123,12 +121,30 @@ jobs:
           "$BAL" pull ballerinax/metrics.logs
           "$BAL" pull wso2/icp.runtime.bridge
 
+      - name: Pre-pull ICP Ballerina modules (Windows)
+        if: runner.os == 'Windows' && matrix.example == 'icp'
+        shell: pwsh
+        run: |
+          $base = Split-Path $env:WSO2_INTEGRATOR_PATH
+          $bal = Join-Path $base 'components\ballerina\bin\bal.bat'
+          $env:JAVA_HOME = (Get-ChildItem (Join-Path $base 'components\dependencies') -Directory -Filter 'jdk-*' | Select-Object -First 1).FullName
+          & $bal pull ballerinax/metrics.logs
+          & $bal pull wso2/icp.runtime.bridge
+
       - name: Install wso2ipw from source
         run: |
           npm install
           npm link
 
+      - name: Install Chrome for playwright-cli (ICP)
+        if: matrix.example == 'icp'
+        shell: bash
+        run: |
+          cd node_modules/@playwright/cli/node_modules/playwright-core
+          npx playwright install --with-deps chrome
+
       - name: Run ${{ matrix.example }}
+        id: run
         shell: bash
         # Windows runners have a ~50% failure rate on project creation (product bug).
         continue-on-error: ${{ runner.os == 'Windows' }}
@@ -137,7 +153,7 @@ jobs:
         run: bash "$(npm root -g)/wso2ipw/examples/${{ matrix.example }}/run-all.sh"
 
       - name: Upload screenshots on failure
-        if: failure()
+        if: failure() || steps.run.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: screenshots-${{ matrix.example }}-${{ matrix.os }}

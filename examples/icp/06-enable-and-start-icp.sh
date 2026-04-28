@@ -12,9 +12,16 @@ wso2ipw click g:"getByRole('checkbox', {name: 'Enable ICP monitoring'})"
 wso2ipw wait 1000
 
 # Kill leftover ICP server Java processes
-for port in 9445 9446 9450; do
-  lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
-done
+kill_port() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -ti :$1 2>/dev/null | xargs kill -9 2>/dev/null || true
+  else
+    for pid in $(netstat -ano 2>/dev/null | grep ":$1 " | awk '{print $5}' | sort -u); do
+      taskkill //F //PID $pid 2>/dev/null || true
+    done
+  fi
+}
+for port in 9445 9446 9450; do kill_port $port; done
 sleep 1
 
 # Start ICP

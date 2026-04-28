@@ -16,5 +16,13 @@ if [ "$RESPONSE" != "Hello, World!" ]; then
 fi
 
 wso2ipw wait-for-text "ICP: Running"
-wso2ipw terminal
-echo "---"
+
+# Debug: check if Config.toml has bridge config
+CONFIG_TOML=$(find ~/WSO2Integrator -name Config.toml -path '*/target/*' 2>/dev/null | head -1)
+if [ -n "$CONFIG_TOML" ]; then
+  echo "Config.toml: $CONFIG_TOML"
+  cat "$CONFIG_TOML"
+else
+  echo "⚠️  No Config.toml found in target/"
+  find ~/WSO2Integrator -name Config.toml 2>/dev/null
+fi

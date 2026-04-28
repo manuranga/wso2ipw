@@ -16,3 +16,5 @@ if [ "$RESPONSE" != "Hello, World!" ]; then
 fi
 
 wso2ipw wait-for-text "ICP: Running"
+wso2ipw terminal
+echo "---"

@@ -18,7 +18,15 @@ kill_port() {
 for port in 9445 9446 9450; do kill_port $port; done
 sleep 1
 
-trap 'wso2ipw close 2>/dev/null' EXIT
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    wso2ipw screenshot "failure-${PROJECT_NAME}.png" 2>/dev/null || true
+  fi
+  wso2ipw close 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
 DIR="$(cd "$(dirname "$0")" && pwd)"
 for f in "$DIR"/0[1-7]*.sh; do bash "$f"; done
 

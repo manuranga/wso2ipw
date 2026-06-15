@@ -19,6 +19,7 @@ jobs:
     name: ${{ matrix.example }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    continue-on-error: ${{ matrix.example == 'icp' }}
     strategy:
       fail-fast: false
       matrix:

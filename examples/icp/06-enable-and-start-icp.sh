@@ -4,7 +4,7 @@ set -e
 wso2ipw wait 1000
 
 # Navigate to integration overview
-wso2ipw click g:"getByRole('button', {name: /HelloWorld/})"
+wso2ipw click h:"getByRole('button', {name: 'Open Overview'})"
 wso2ipw wait-for-text "Design"
 
 # Enable ICP monitoring

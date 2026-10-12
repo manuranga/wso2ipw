@@ -16,6 +16,10 @@ $PC fill 'input[placeholder="Enter password"]' "admin"
 $PC click 'button:has-text("Sign In")'
 sleep 3
 
+# Newer Integrators register runtimes under default-project unless the project is linked to a cloud project
+if ! $PC snapshot 2>&1 | grep -q "heading \"$ICP_PROJECT\""; then
+  ICP_PROJECT="default-project"
+fi
 $PC click "h6:has-text(\"$ICP_PROJECT\")"
 sleep 2
 $PC click "td:has-text(\"$ICP_INTEGRATION\")"
@@ -25,12 +29,12 @@ for i in $(seq 1 30); do
   $PC goto "https://localhost:9446/organizations/default/projects/$ICP_PROJECT/components/$ICP_INTEGRATION" 2>/dev/null || true
   sleep 2
   SNAPSHOT=$($PC snapshot 2>&1)
-  if echo "$SNAPSHOT" | grep -q "1/1 Online"; then break; fi
+  if echo "$SNAPSHOT" | grep -qE "1/1 (Online|Active)"; then break; fi
   echo "Waiting for runtime to come online... ($i/30)"
 done
 
-echo "$SNAPSHOT" | grep -q "1/1 Online" || { echo "$SNAPSHOT"; echo "❌ Runtime not online in ICP"; exit 1; }
+echo "$SNAPSHOT" | grep -qE "1/1 (Online|Active)" || { echo "$SNAPSHOT"; echo "❌ Runtime not online in ICP"; exit 1; }
 echo "$SNAPSHOT" | grep -q "/hello" || { echo "❌ GET /hello endpoint not found in ICP"; exit 1; }
-echo "✅ ICP dashboard: $ICP_INTEGRATION 1/1 Online, /hello"
+echo "✅ ICP dashboard: $ICP_PROJECT/$ICP_INTEGRATION 1/1 up, /hello"
 
 $PC close

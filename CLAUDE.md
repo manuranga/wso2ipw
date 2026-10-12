@@ -48,7 +48,7 @@ Required for all ref-targeting commands
 - interact: click/dblclick <g:|h:><ref>, fill <g:|h:><ref> <text> (fill auto-detects input type (normal, cm, shadow). Use fill over type for input boxes)
 - keys: type <text>, press <key>
 - terminal: terminal [--terminal=<name>], wait-for-terminal <text> [--timeout=N] [--terminal=<name>]
-- delay: wait [ms], wait-for-text <text> [--timeout=N] [--hidden]
+- delay: wait [ms], wait-for-text <text|/re/> [--timeout=N] [--hidden]
 - flags: --no-diff (show the full snapshot)
 
 ## Architecture

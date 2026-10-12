@@ -4,13 +4,16 @@ set -e
 INTEGRATION_NAME=${INTEGRATION_NAME:-"HelloWorld"}
 PROJECT_NAME=${PROJECT_NAME:-"HelloProject"}
 
-wso2ipw wait-for-text "Create New Integration"
+# Heading differs across Integrator versions
+WELCOME_HEADING="/Create New Integration|Start your Integration Project|Create a Project/"
+
+wso2ipw wait-for-text "$WELCOME_HEADING"
 
 create_integration() {
   wso2ipw click g:"getByRole('button', {name: 'Create', exact: true})"
-  wso2ipw fill g:"getByRole('textbox', {name: /Integration Name/})" "$INTEGRATION_NAME"
-  wso2ipw fill g:"getByRole('textbox', {name: /Project Name/})" "$PROJECT_NAME"
-  wso2ipw click g:"getByRole('button', {name: 'Create Integration'})"
+  wso2ipw fill g:"getByRole('textbox', {name: /Integration Name/i})" "$INTEGRATION_NAME"
+  wso2ipw fill g:"getByRole('textbox', {name: /Project Name/i})" "$PROJECT_NAME"
+  wso2ipw click g:"getByRole('button', {name: /^Create( Integration)?$/})"
   wso2ipw wait-for-text "Deployment Options" --timeout=120000
 }
 
@@ -27,5 +30,5 @@ for attempt in $(seq 1 $MAX); do
   wso2ipw open
   wso2ipw wait-for-text "Skip for now"
   wso2ipw click h:"getByRole('button', {name: 'Skip for now'})"
-  wso2ipw wait-for-text "Create New Integration"
+  wso2ipw wait-for-text "$WELCOME_HEADING"
 done

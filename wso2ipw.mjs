@@ -213,6 +213,8 @@ const APP_PATHS = IS_WIN ? [
   path.join(process.env.LOCALAPPDATA || '', 'Programs', 'WSO2 Integrator', 'WSO2 Integrator.exe'),
   path.join(process.env.ProgramFiles || '', 'WSO2 Integrator', 'WSO2 Integrator.exe'),
 ] : [
+  path.join(os.homedir(), 'Applications/WSO2 Integrator.app/Contents/MacOS/WSO2 Integrator'),
+  '/Applications/WSO2 Integrator.app/Contents/MacOS/WSO2 Integrator',
   path.join(os.homedir(), 'Applications/WSO2 Integrator.app/Contents/MacOS/Electron'),
   '/Applications/WSO2 Integrator.app/Contents/MacOS/Electron',
   '/usr/share/wso2-integrator/wso2-integrator',
@@ -732,6 +734,8 @@ async function startDaemonProcess() {
         if (!text) throw new Error('Usage: wait-for-text <text> [--timeout=N] [--hidden]');
         const timeout = parseInt(parseFlag(args, 'timeout') ?? String(LONG_TIMEOUT));
         const hidden = args.includes('--hidden');
+        const re = text.match(/^\/(.+)\/([a-z]*)$/);
+        const matcher = re ? new RegExp(re[1], re[2]) : text;
 
         if (hidden) {
           // Wait for text to disappear from BOTH frames
@@ -741,10 +745,10 @@ async function startDaemonProcess() {
               (async () => {
                 const f = webviewFrame();
                 if (!f) return false;
-                try { return await f.getByText(text).first().isVisible(); }
+                try { return await f.getByText(matcher).first().isVisible(); }
                 catch { return false; }
               })(),
-              mainFrame().getByText(text).first().isVisible().catch(() => false),
+              mainFrame().getByText(matcher).first().isVisible().catch(() => false),
             ]);
             if (!guestHas && !hostHas) {
               const snap = await unifiedSnapshot();
@@ -762,10 +766,10 @@ async function startDaemonProcess() {
             (async () => {
               const f = webviewFrame();
               if (!f) return false;
-              try { return await f.getByText(text).first().isVisible(); }
+              try { return await f.getByText(matcher).first().isVisible(); }
               catch { return false; }
             })(),
-            mainFrame().getByText(text).first().isVisible().catch(() => false),
+            mainFrame().getByText(matcher).first().isVisible().catch(() => false),
           ]);
           if (guestHas || hostHas) {
             const snap = await unifiedSnapshot();
@@ -958,7 +962,7 @@ Commands:
   eval <g:|h:><js>              Evaluate JS in frame
   screenshot [file]             Save screenshot
   wait [ms]                     Sleep (default ${SLOW_SETTLE_MS}ms)
-  wait-for-text <text>          Wait for text in either frame (--hidden for disappear)
+  wait-for-text <text|/re/>     Wait for text in either frame (--hidden for disappear)
   wait-for-terminal <text>      Wait for text in terminal buffer [--terminal=<name>]
   terminal [--terminal=<name>]  Read terminal buffer text (canvas-rendered, from memory)
   close                         Quit the app
